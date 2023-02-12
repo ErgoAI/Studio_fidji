@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<launchConfiguration type="org.eclipse.ui.externaltools.ProgramBuilderLaunchConfigurationType">
+<booleanAttribute key="org.eclipse.debug.ui.ATTR_LAUNCH_IN_BACKGROUND" value="false"/>
+<stringAttribute key="org.eclipse.ui.externaltools.ATTR_BUILD_SCOPE" value="${working_set:&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&#10;&lt;resources&gt;&#10;&lt;item path=&quot;/Fidji/src/com/xsb/xj/help/help.P&quot; type=&quot;1&quot;/&gt;&#10;&lt;item path=&quot;/Fidji/src/com/xsb/xj/help/readhtml.P&quot; type=&quot;1&quot;/&gt;&#10;&lt;item path=&quot;/Fidji/src/com/xsb/xj/prologCache.P&quot; type=&quot;1&quot;/&gt;&#10;&lt;item path=&quot;/Fidji/src/com/xsb/xj/xj2.P&quot; type=&quot;1&quot;/&gt;&#10;&lt;item path=&quot;/Fidji/src/com/xsb/xj/xjdisplays.P&quot; type=&quot;1&quot;/&gt;&#10;&lt;/resources&gt;}"/>
+<stringAttribute key="org.eclipse.ui.externaltools.ATTR_LOCATION" value="${XSB_BIN_DIRECTORY}/xsb"/>
+<stringAttribute key="org.eclipse.ui.externaltools.ATTR_RUN_BUILD_KINDS" value="full,incremental,auto,"/>
+<stringAttribute key="org.eclipse.ui.externaltools.ATTR_TOOL_ARGUMENTS" value="-e &quot;catch((compile('src/com/xsb/xj/prologCache.P'), compile('src/com/xsb/xj/xj2.P'), compile('src/com/xsb/xj/xjdisplays.P'), compile('src/com/xsb/xj/help/help.P'), compile('src/com/xsb/xj/help/readhtml.P')),_,sys_exit(1)), halt.&quot;"/>
+<booleanAttribute key="org.eclipse.ui.externaltools.ATTR_TRIGGERS_CONFIGURED" value="true"/>
+<stringAttribute key="org.eclipse.ui.externaltools.ATTR_WORKING_DIRECTORY" value="${project_loc}"/>
+</launchConfiguration>

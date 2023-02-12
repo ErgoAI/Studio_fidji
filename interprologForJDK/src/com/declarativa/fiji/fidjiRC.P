@@ -1,0 +1,21 @@
+/* Example Prolog file to kick Fiji into action. An application is likely to replace it in order to set up the screen */
+
+fjMain :- 
+	ipListenerWindow(W), 
+	% javaMessage(W,show), this needs to happen sooner, to avoid AWT thread trouble
+	javaMessage(W,focusInput). 
+	% commenting the previous line would let the listener window invisible; 
+	% javaMessage('java.lang.System',string(U),getProperty(string('user.name'))), 
+	/*
+	% more efficient:
+	username(U),
+	write('Hello '), write(U), writeln('!'),
+	ipObjectSpec(boolean,True,[1],_), javaMessage(W,setAlwaysOnTop(True)).*/
+	
+/* other commands, e.g. to set up a demo on startup:
+	% to show the Coherent Query window:
+	javaMessage(W,showFloraQuery(string('(ipListenerWindow(?W), javaMessage(?W,show))@\prologall.'))),
+	% Open a file into the editor:
+	javaMessage('java.io.File',F,'File'(string('/Users/mc/Dropbox/declarativa/projectos/Fidji/FIBODemo/regwdemo-v42-all.flr'))),
+	javaMessage('com.declarativa.fiji.LogicProgramEditor',E,makeEditor(F,W)). */
+	

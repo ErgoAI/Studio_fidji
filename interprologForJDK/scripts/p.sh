@@ -1,0 +1,2 @@
+. unixVariables.sh
+${JAVA_BIN}/java -Xss2M -Xmx32M -Djava.library.path=${XSB_BIN_DIRECTORY} -DXSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY} -classpath ${CLASSPATH}:../ergoStudio.jar com.declarativa.interprolog.examples.PerformanceTester $1 ${XSB_BIN_DIRECTORY}

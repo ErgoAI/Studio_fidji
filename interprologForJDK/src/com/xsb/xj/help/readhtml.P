@@ -1,0 +1,303 @@
+/*
+Converts HTML doc file into prolog file with guiHelp/3 terms that
+can be used to generate_help.
+
+To produce help file from word document for use with javahelp
+first convert the word document file into HTML file.
+Then do the following:
+
+assert(library_directory('C:\XSBSYS\XSBCVS\lib\utils')).%% for stdutils
+import read_html/1 from readhtml.
+read_html(HTMLDocFile). %% from HTMLFile.html will produce HTMLFile_gen.P
+import generate_help/0 from help.
+[HTMLFile_gen].
+generate_help.
+
+If HTML contains images and in the process of
+MS Doc -> HTML conversion a directory with image files
+is produced, need to copy that image directory into docs directory
+for example if image files are in
+P:\Software Documentation\ReferenceManual_files directory do
+xcopy /S/ P:\Software Documentation\ReferenceManual_files C:\xsbsys\XSBCVS\lib\ode_cdf\ode_classifier\docs\ReferenceManual_files
+
+*/
+:- export read_html/1, read_html/2.
+
+:- import file_read_line_list/2, file_open/3, file_close/1, file_seek/4, file_pos/2 from file_io.
+:- import slash/1 from machine.
+:- import concat_atom/2 from string.
+:- import append/3 from basics.
+:- import digit/1, whitespace/1, file_name_split/4 from stdutils.
+
+:- dynamic ref_table/2.
+:- index(ref_table/2, [1]).
+	
+read_html(File):-
+	read_html(File, _).
+	
+
+read_html(File, OutFile):-
+	(var(OutFile)
+	 ->	file_name_split(File, Path, Name, _),
+		slash(Slash),
+		concat_atom([Path, Slash, Name, '_gen.P'], OutFile)
+	 ;	true
+	),	
+	file_open(File,read,Stream),
+	tell(OutFile),
+	read_html_1(Stream, TokList),
+	process_sections(TokList, NewTokList),
+	build_gui_help(NewTokList, []),
+	told,
+	file_close(Stream).
+
+read_html_1(Stream, TokList):-
+	file_read_line_list(Stream, List), !,
+	read_chars(List, Stream, Toks),
+	append(Toks, Rest, TokList),
+	read_html_1(Stream, Rest).
+read_html_1(_, []).
+
+read_chars([], _, []).
+read_chars([0'<|Chars], Stream, AllToks):-
+	file_pos(Stream, Position),
+	(read_tag_start(Chars, Stream, Toks, Remainder)
+	 ->	append(Toks, NewToks, AllToks),
+		read_chars(Remainder, Stream, NewToks)
+	 ;	change_file_position(Stream, Position),
+		fail
+	).
+read_chars([C|Chars], Stream, NewToks):-
+	read_chars(Chars, Stream, Toks),
+	(Toks = [section(Next)|More]
+	 ->	NewToks = [section([C|Next])|More]
+	 ;	NewToks = [section([C])|Toks]
+	).
+
+% read header
+read_tag_start([0'h|Chars], Stream, TokList, Remainder):-
+	read_integer(Chars, IntCodes, [0'>|Rest]),
+	!,
+	number_codes(HeaderType, IntCodes),
+	read_header_tag_end(Rest, Stream, TaggedHeaderCodes, Remainder),
+	strip_header_tags(TaggedHeaderCodes, HeaderCodes, AnchorIfAny),
+	atom_codes(Header, HeaderCodes),
+	(AnchorIfAny = ''
+	 ->	TokList = [header(Header, HeaderType)]
+	 ;	assert(ref_table(AnchorIfAny, Header)),
+		atom_codes_list(['<a name="',AnchorIfAny,'"></a>'], Section),
+		TokList = [header(Header, HeaderType), section(Section)]
+	).
+% read link
+read_tag_start([0'a|Chars], Stream, [section([0'<,0'a,0' ,0'h,0'r,0'e,0'f,0'=]), internal_ref('', HREF),
+				     section([0'>|TextCodes]),section([0'<,0'/,0'a,0'>])], Remainder):-
+	read_nec_whitespace(Chars, Stream, Chars0),
+	starts_with([0'h,0'r,0'e,0'f], Chars0, Stream, RefChars),
+	read_reference(RefChars, Stream, HREFCodes, [0'>|Rest]),
+	read_reference_text(Rest, Stream, TextCodes, Remainder),
+	atom_codes(HREF, HREFCodes).
+% read image link (img)
+read_tag_start([0'i,0'm,0'g|Chars], Stream, [section([0'<,0'i,0'm,0'g,0' |BeforeChars]),section([0's,0'r,0'c,0'=]),
+					     internal_ref(help_top, HREF),section(TagCodes), section([0'>])], Remainder):-
+	read_nec_whitespace(Chars, Stream, Chars0),
+	find_tag_substring(Chars0, [0's,0'r,0'c], Stream, BeforeChars, AfterChars),
+	read_reference(AfterChars, Stream, HREFCodes, Rest),
+	read_till_char(Rest, 0'>, Stream, TagCodes, Remainder),
+	atom_codes(HREF, HREFCodes).
+% read image link (v:imagedata)
+read_tag_start([0'v,0':,0'i,0'm,0'a,0'g,0'e,0'd,0'a,0't,0'a|Chars],
+	       Stream,
+	       [section([0'<,0'v,0':,0'i,0'm,0'a,0'g,0'e,0'd,0'a,0't,0'a,0' |BeforeChars]),section([0's,0'r,0'c,0'=]),
+		internal_ref(help_top, HREF),section(TagCodes), section([0'>])], Remainder):-
+	read_nec_whitespace(Chars, Stream, Chars0),
+	find_tag_substring(Chars0, [0's,0'r,0'c], Stream, BeforeChars, AfterChars),
+	read_reference(AfterChars, Stream, HREFCodes, Rest),
+	read_till_char(Rest, 0'>, Stream, TagCodes, Remainder),
+	atom_codes(HREF, HREFCodes).
+% Remove this Microsoft HTML peculiaruty
+% <p class=MsoNormal><![if !supportEmptyParas]>&nbsp;<![endif]><o:p></o:p></p>
+read_tag_start([0'p,0' ,0'c,0'l,0'a,0's,0's,0'=,0'M,0's,0'o,0'N,0'o,0'r,0'm,0'a,0'l,0'>,0'<,0'!,0'[,0'i,0'f,0' ,0'!,0's,0'u,0'p,0'p,0'o,0'r,0't,0'E,0'm,0'p,0't,0'y,0'P,0'a,0'r,0'a,0's,0'],0'>,0'&,0'n,0'b,0's,0'p,0';,0'<,0'!,0'[,0'e,0'n,0'd,0'i,0'f,0'],0'>,0'<,0'o,0':,0'p,0'>,0'<,0'/,0'o,0':,0'p,0'>,0'<,0'/,0'p,0'>|Chars], _, [], Chars).
+
+%% strip any tags inside the header
+strip_header_tags([], [],'').
+strip_header_tags([0'<,0'a|Chars], HeaderCodes, HREF):-
+	read_nec_whitespace(Chars, -1, [0'n,0'a,0'm,0'e|TagCodes]),
+	read_reference(TagCodes, -1, HREFCodes, [0'>|Rest]), !,
+	atom_codes(HREF, HREFCodes),
+	strip_header_tags(Rest, HeaderCodes, _).
+strip_header_tags([0'<|TagCodes], HeaderCodes, HREF):- !,
+	read_till_char(TagCodes, 0'>, -1, _, Rest),
+	strip_header_tags(Rest, HeaderCodes, HREF).
+% remove line breaks, in the header
+strip_header_tags([13, 10|TagCodes], [0' |HeaderCodes], HREF):- !,
+	strip_header_tags(TagCodes, HeaderCodes, HREF).
+strip_header_tags([10|TagCodes], [0' |HeaderCodes], HREF):- !,
+	strip_header_tags(TagCodes, HeaderCodes, HREF).
+strip_header_tags([C|TagCodes], [C|HeaderCodes], HREF):- 
+	strip_header_tags(TagCodes, HeaderCodes, HREF).
+
+read_integer(Csi,Digsi,Cso) :-
+	(Csi = [C|Cs]
+	 ->	(digit(C)
+		 ->	Digsi = [C|Digs],
+			read_integer(Cs,Digs,Cso)
+		 ;	Digsi=[],
+			Cso = Csi
+		)
+	 ;	Digsi=[],
+		Cso = Csi
+	).
+
+read_nec_whitespace([], Stream, Cs):-
+	read_whitespace([], Stream, Cs).
+read_nec_whitespace([C|Cs],Stream, Cso) :-
+	 whitespace(C),
+	 read_whitespace(Cs,Stream, Cso).
+
+read_whitespace([], Stream, Cs):-
+	(file_read_line_list0(Stream, List)
+	 ->	read_whitespace(List, Stream, Cs)
+	 ;	Cs = []
+	).
+read_whitespace([C|Cs],Stream, Cso) :-
+	 (whitespace(C)
+	  ->	 read_whitespace(Cs,Stream, Cso)
+	  ;	 Cso = [C|Cs]
+	 ).
+
+read_header_tag_end([], Stream, HeaderList, Remainder):-
+	(file_read_line_list(Stream, List)
+	 ->	read_header_tag_end(List, Stream, HeaderList, Remainder)
+	 ;	HeaderList = [], Remainder = []
+	).
+read_header_tag_end([0'<,0'/,0'h|Chars],_, [],Rest):-
+	read_integer(Chars, _Int, [0'>|Rest]),
+	!.
+read_header_tag_end([H|Chars],Stream, [H|HeaderList], Remainder):-
+	read_header_tag_end(Chars, Stream, HeaderList, Remainder).
+
+read_reference(Chars, Stream, HREFCodes, Rest):-
+	read_whitespace(Chars, Stream, [0'=|Chars0]),
+	read_whitespace(Chars0, Stream, [0'"|Chars1]),
+	read_till_char(Chars1, 0'", Stream, HREFCodes, Chars2),
+	read_whitespace(Chars2, Stream, Rest).
+
+read_till_char([], C, Stream, BeforeQuote, AfterQuote):-
+	(file_read_line_list0(Stream, List)
+	 ->	read_till_char(List, C, Stream, BeforeQuote, AfterQuote)
+	 ;	BeforeQuote = [], AfterQuote = []
+	).
+read_till_char([C|Chars], C, _, [], Chars) :- !.
+read_till_char([H|Chars], C, Stream, [H|BeforeQuote], AfterQuote) :-
+	read_till_char(Chars, C, Stream, BeforeQuote, AfterQuote).
+
+find_tag_substring([], C, Stream, Before, After):-
+	file_read_line_list0(Stream, List),
+	find_tag_substring(List, C, Stream, Before, After).
+find_tag_substring([C|Chars], [C|SubstrCodes], _, [], Rest) :-
+	append(SubstrCodes, Rest, Chars),!.
+find_tag_substring([0'>|_], _, _, _, _) :- !, fail.
+find_tag_substring([H|Chars], C, Stream, [H|Before], After) :-
+	find_tag_substring(Chars, C, Stream, Before, After).
+
+%% doing instead of unification because the line might break - need to read next line then
+starts_with([], List,  _, List) :- !.
+starts_with(StartsWith, [], Stream, Rest):-
+	file_read_line_list(Stream, List),
+	starts_with(StartsWith, List, Stream, Rest).
+starts_with([C|StartsWith], [C|List], Stream, Rest):-
+	 starts_with(StartsWith, List, Stream, Rest).
+
+read_reference_text([], Stream, Text, Rest):-
+	(file_read_line_list(Stream, List)
+	 ->	read_reference_text(List, Stream, Text, Rest)
+	 ;	Text = [], Rest = []
+	).
+read_reference_text([0'<|Chars], Stream, [], Rest):-
+	read_whitespace(Chars, Stream, Chars0),
+	starts_with([0'/, 0'a], Chars0, Stream, Chars1),
+	read_whitespace(Chars1, Stream, [0'> |Rest]), !.
+read_reference_text([C|Chars], Stream, [C|Text], Rest):-
+	read_reference_text(Chars, Stream, Text, Rest).
+
+process_sections([], []).
+process_sections([section(S)|TokList], [section(Section)|Rest1]):- !,
+	get_section_list([section(S)|TokList], SecList, Rest),
+	atom_codes(Section, SecList),
+	process_sections(Rest, Rest1).
+process_sections([T|TokList], [T|TokList1]):- 
+	process_sections(TokList, TokList1).
+
+get_section_list([section(Section)|More], SecList, Rest):- !,
+	append(Section, SecList0, SecList),
+	get_section_list(More, SecList0, Rest).
+get_section_list(List, [], List).
+
+build_gui_help([], _).
+build_gui_help([section(_)|TokList], ParentToc):- !,
+	build_gui_help(TokList, ParentToc).
+build_gui_help([internal_ref(_, _)|TokList], ParentToc):- !,
+	build_gui_help(TokList, ParentToc).
+build_gui_help([header(H, Level)|TokList], []):- !,
+	Toc = [header(H, Level)],
+	get_description_list(TokList, SectionList, Rest), 
+	(SectionList = []
+	 ->	true
+	 ;	create_help_term(H, Toc, SectionList)
+	),
+	build_gui_help(Rest, Toc).
+build_gui_help([header(H, Level)|TokList], [header(PH, PLevel)|ParentToc]):-
+	Level > PLevel, !,
+	Toc = [header(H, Level), header(PH, PLevel) |ParentToc],
+	get_description_list(TokList, SectionList, Rest),
+	(SectionList = []
+	 ->	true
+	 ;	create_help_term(H, Toc, SectionList)
+	),
+	build_gui_help(Rest, Toc).
+build_gui_help(TokList, [_|ParentToc]):-
+	build_gui_help(TokList, ParentToc).
+
+
+get_description_list([], [], []).
+get_description_list([header(H, L)|Rest],[],[header(H, L)|Rest]) :- !.
+get_description_list([section(Section)|Rest],[Section|DescToks],Remainder):- !,
+	get_description_list(Rest,DescToks,Remainder).
+get_description_list([internal_ref(Id, HREF)|Rest],[internal_ref(NewId, HREF)|DescToks],Remainder):- !,
+	(atom_codes(HREF, [0'#|AnchorCodes]), atom_codes(Anchor, AnchorCodes), ref_table(Anchor, NewId)
+	 ->	true
+	 ;	NewId = Id
+	),
+	get_description_list(Rest,DescToks,Remainder).
+get_description_list([Tok|Rest],[Tok|DescToks],Remainder):-
+	get_description_list(Rest,DescToks,Remainder).
+
+create_help_term(H, Toc, SectionList):-
+	Id = H,
+	get_toc(Toc, [], Toc1),
+	(SectionList = section(Section)
+	 ->	concat_atom(['<html><body><h2>',H,'</h2>', Section, '</body></html>'], Text)
+	 ;	append(['<html><body><h2>',H,'</h2>'| SectionList], ['</body></html>'], Text)
+	),
+	writeq(guiHelp(Id, Toc1, Text)), writeln('.').
+
+get_toc([], L, L).
+get_toc([header(H, _)|TokList], Tail, L):-
+	get_toc(TokList, [H|Tail], L).
+
+file_read_line_list0(Stream, List):-
+	\+(Stream = -1),
+	file_read_line_list(Stream, List).
+
+atom_codes_list([], []).
+atom_codes_list([A| Atoms], List):-
+	atom_codes(A, ACodes),
+	append(ACodes, List0, List),
+	atom_codes_list(Atoms, List0).
+
+change_file_position(Stream, NewPosition):-
+	file_pos(Stream, Position),
+	(Position == NewPosition
+	 ->	true
+	 ;	file_seek(Stream, NewPosition, 0, _Return)
+	).

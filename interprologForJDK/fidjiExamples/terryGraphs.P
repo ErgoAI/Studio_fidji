@@ -1,0 +1,85 @@
+p1(X,_F) :- q1(X).	
+p1(X,F) :- succ1mil(1000000,X,Z), p1(Z,F). 
+
+succUntil(N,X,Y) :- nonvar(X), !, X<N, Y is X+1.
+succUntil(_N,X,Y) :- nonvar(Y), !, Y>0, X is Y-1.
+succUntil(_,0,1) .
+
+/*
+p1/2: no answer to ?- p1(0,_).
+q1(_):-fail.
+
+p1/2: unique answer to ?- p1(0,_).
+q1(1000000).
+
+p1/2: redundant answers to p1(X,Y).
+add same plus 4 or 6 facts
+q1(1000000).
+p1(_,_).
+*/
+
+p2(X,_F,Y):-q2(X,Y). 
+p2(X,F,Y):-succUntil(1000000,X,Z), p2(Z,F,Y).
+
+q2(1000000,1).
+q2(1000000,2).
+q2(1000000,3).
+q2(1000000,4).	
+/*
+?- p2(0,F,Y).
+q(1000000, ?I?) were added with ?I? ranging from 1 to 1, 4 or 8.
+*/
+
+/* Nodes: 1..N */
+% edge(ID1,ID2,EdgeID,Type,Term,Tip)
+edge(N1,N2,N1-N2,succ,null,N1-N2,Size) :- succUntil(Size,N1,N2).
+% node(ID,Type,Term,Tip)
+% node(ID,number,ID,null).
+node(ID,even_number,ID,'Hey, I''m even!') :- 0 is ID mod 2, !.
+node(ID,odd_number,ID,'I feel odd').
+
+% spartan variant, for Fidji's browseGraphRelation
+edge(N1,N2,Size) :- succUntil(Size,N1,N2).
+
+findInitialNodes(InitialNodeCount,Size,Nodes) :- Delta is Size div InitialNodeCount, findInitialNodes(0,Delta,Size,Nodes).
+
+% findInitialNodes(FirstNode,InitialNodeCount, GraphNodeCount, InitialNodes).
+
+findInitialNodes(FirstNode,_InitialNodeCount, GraphNodeCount, []) :- FirstNode > GraphNodeCount-1, !.
+findInitialNodes(ID,InitialNodeCount, GraphNodeCount,[ID|Nodes]) :- 
+	NextID is ID+InitialNodeCount, findInitialNodes(NextID,InitialNodeCount,GraphNodeCount, Nodes).
+
+/*
+Size = 100, InitialNodeCount is Size div 2, findInitialNodes(InitialNodeCount,Size,[Node1|_InitialNodes]),
+GT = gt('XJ$LAZY',[class='com.xsb.xj.XJGraph', layout=isomLayout, undirected, labelsInNodes, cubicCurve, maxItems=Size,
+	myGUI(Graph), root, 
+	operation(term(T,_P),javaMessage(Graph,setPickingMode),menu('Pick Mode')),
+	operation(term(T,_P),javaMessage(Graph,setTransformingMode),menu('Scroll Mode')),
+	operation(term(T,_P),javaMessage(Graph,expandAllVertices),menu('Expand More')),
+	operation(term(T,_P),javaMessage(Graph,expandAll),menu('Expand All')),
+	operation(term(T,_P),javaMessage(Graph,reapplyLayout),menu('Rearrange')),
+	operation(term(T,_P),writeln(double-Graph),doubleclick),
+	operation(term(T,_P), (P=[_,Layout], javaMessage(Graph,applyLayout(string(Layout)))), menu(P,'Layouts'('frlayout2','daglayout','isomlayout','springlayout2'))),
+	nodeTypes([ 
+		number=[
+			operation(term(T,_P),writeln(id-T/_P),menu('Show ID')),
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick)
+			] ]),
+	edgeTypes([
+		succ=[color=blue,dotted,operation(term(T,P),writeln(id-T/P),menu('Show ID'))]
+	])],
+	lazy( edge(_NodeID1,NodeID2,_ID,Type,_Term,_Tip, Size), node(ID,Type,Term,Tip), [Node1])
+	), createXJcomponent(GT,GUI), javaMessage('com.xsb.xj.XJDesktop',testGUI(GUI)), 
+	buildInitiallyFlatTermModel(_InitialNodes,_INM), javaMessage(GUI,addNodes(_INM)).
+
+
+Size = 100, InitialNodeCount is Size div 2, findInitialNodes(InitialNodeCount,Size,InitialNodes),
+fjGenericGraph(
+	InitialNodes, edge(_NodeID1,NodeID2,_ID,Type,_Term,_Tip, Size), node(ID,Type,Term,Tip),
+	[labelsInNodes, cubicCurve, maxItems=Size],
+	% [number=[]],
+	[even_number=[color=red],odd_number=[color=pink]]
+	[succ=[color=blue,dotted]],
+	GraphUI).
+	
+	*/

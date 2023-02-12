@@ -1,0 +1,52 @@
+/*
+GT = gt('XJ$LAZY',[class='com.xsb.xj.XJGraph', layout=isomLayout, undirected, labelsInNodes, cubicCurve,
+	myGUI(Graph), root, 
+	operation(term(T,_P),javaMessage(Graph,setPickingMode),menu('Pick Mode')),
+	operation(term(T,_P),javaMessage(Graph,setTransformingMode),menu('Scroll Mode')),
+	operation(term(T,_P),javaMessage(Graph,expandAllVertices),menu('Expand More')),
+	operation(term(T,_P),javaMessage(Graph,expandAll),menu('Expand All')),
+	operation(term(T,_P),(javaMessage(Graph,collapseSelectedNodes)),menu('Collapse')),
+	operation(term(T,_P),javaMessage(Graph,reapplyLayout),menu('Rearrange')),
+	operation(term(T,_P),writeln(double-Graph),doubleclick),
+	operation(term(T,_P), (P=[_,Layout], javaMessage(Graph,applyLayout(string(Layout)))), menu(P,'Layouts'('frlayout2','daglayout','isomlayout','springlayout2'))),
+	nodeTypes([ 
+		accessible=[icon='http://www.berklee.edu/sites/default/files/images/BPC/wheelchair-icon.jpg',
+			operation(term(T,_P),writeln(id-T/_P),menu('Show ID')),
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick)
+			], 
+		normal=[icon='/com/coherentknowledge/fidji/flora.gif',
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick)],
+		xjCollapsed=[ % see COLLAPSED_TYPE in Java
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,uncollapse(TM))),menu('Uncollapse'))] 
+		]),
+	edgeTypes([
+		blueLine=[color=blue,dotted,operation(term(T,P),writeln(id-T/P),menu('Show ID'))], 
+		greenLine=[color=green, dashed], 
+		yellowLine=[color=yellow]
+	])],
+	lazy( segment(_NodeID1,NodeID2,_ID,Type,_Term,_Tip), station(ID,Type,Term,Tip), ['Avenida','Restauradores'])
+	), createXJcomponent(GT,GUI), javaMessage('com.xsb.xj.XJDesktop',testGUI(GUI)).
+
+fjGenericGraph(
+	['Avenida'], segment(_NodeID1,NodeID2,ID,Type,_Term,_Tip), station(ID,Type,Term,Tip),
+	[layout=frlayout2, labelsInNodes, cubicCurve, maxItems=20000],
+	[
+		accessible=[icon='http://www.berklee.edu/sites/default/files/images/BPC/wheelchair-icon.jpg'], 
+		normal=[icon='/com/coherentknowledge/fidji/flora.gif'] ],
+	[blueLine=[color=blue,dotted], 
+		greenLine=[color=green, dashed], 
+		yellowLine=[color=yellow] ],
+	GraphUI).
+*/
+
+station(S,T,S,Tip) :- station(S,T,Tip).
+station('Avenida',normal,'You''d better be into shape!') :- !.
+station(_Name,accessible,'May have elevators').
+
+segment(N1,N2,N1-N2,Type,Term,Tip) :- segment(N1,N2,Type,Term,Tip).
+segment('Avenida','Restauradores',blueLine,1,'500 meters').
+segment('Avenida','Marquês de Pombal',blueLine,2,'600 meters').
+segment('Rato','Marquês de Pombal',yellowLine,3,'400 meters').
+segment('Chiado','Restauradores',blueLine,4,'700 meters').
+segment('Chiado','Cais do Sodré',greenLine,5,null).
+segment('Chiado','Terreiro do Paço',greenLine,'<html><h1>SIX',null).

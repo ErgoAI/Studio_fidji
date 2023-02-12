@@ -1,0 +1,15 @@
+?company[ceo->?person] :- 
+	wish(ground(?person))^(?company[employee->?person]),   
+	?person[manages->?company].
+
+Acme[employee->Mary].
+Acme[employee->Paul].
+Acme[employee->Peter].
+Acme[employee->Jakob].
+Acme[employee->Olivia].
+Acme[employee->Benjamin].
+Acme[employee->John].
+John[manages->Acme].
+
+?- Acme[ceo->?Y]. 
+ 

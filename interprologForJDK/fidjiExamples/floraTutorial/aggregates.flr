@@ -1,0 +1,18 @@
+John : Employee[salary(2011)->10, 
+	salary(2012)->11, salary(2013)->12].
+Ed : Employee[salary(2011)->20,
+	salary(2012)->22, salary(2013)->24].
+Sue : Employee[salary(2011)->30,
+	salary(2012)->33, salary(2013)->36].
+
+// count employees
+?- ?employeeCount = count{?who | ?who : Employee}.
+
+// average salary of all employees in 2012
+?- ?avgSalary = avg{?salary | ?who : Employee[salary(2012)->?salary]}.
+
+// minimum salary
+?- ?min = min{?salary | ?who : Employee[salary(?year)->?salary]}.
+
+// unique years for which salary information is available
+?- ?years = collectset{?year | ?who : Employee[salary(?year)->?salary]}.

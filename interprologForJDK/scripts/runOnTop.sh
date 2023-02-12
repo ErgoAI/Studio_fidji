@@ -1,0 +1,2 @@
+. unixVariables.sh
+${XSB_BIN_DIRECTORY}/xsb -e "['../src/com/declarativa/interprolog/xsb/interprolog.P'], spawn_java('../ergoStudio.jar'), java('java.lang.System'-err,print(string('Hello from Java!')))."

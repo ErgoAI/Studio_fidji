@@ -1,0 +1,374 @@
+<!--
+    Copyright Miguel Calejo, InterProlog Consulting / Renting Point, Portugal 2014
+
+This build either of Coherent ErgoAI Studio, InterProlog Prolog Studio of InterProlog Java bridge.
+
+First, please setup XSB_BIN_DIRECTORY below (and possibly ERGODIR). 
+
+Then:
+
+ant: builds ergoStudio.jar if the Coherent Knowledge Systems source subtree is present, or interPrologStudio.jar otherwise 
+ant interprologJar: builds interprolog.jar
+ant ergo2javaJar: builds ergo2java.jar
+ant javadoc: Ergo Studio API documentation, which wil include the following:
+ant fijijavadoc: Prolog Studio API documentation, which will include the following:
+ant ipjavadoc: Java bridge API documentation
+
+
+You can also obtain interPrologStudio.jar and interprolog.jar from ergoStudio.jar, by running the following Unix script:
+# Strip proprietary code out of Fidji
+echo 'Obtaining interPrologStudio...'
+cp ergoStudio.jar interPrologStudio.jar
+zip -dq interPrologStudio.jar com/coherentknowledge/* 
+echo 'Obtaining InterProlog...'
+cp interPrologStudio.jar interprolog.jar
+zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/* edu/* javax/* META-INF/* org/* theme.dtd
+-->
+<project default="main">
+  <!-- Indicate XSB's config/..../bin directory position here: -->
+  <!--These properties could also be set via comand line args, e.g. ant -DXSB_BIN_DIRECTORY="/Users/mc/subversion/XSB/bin" -->
+  <property name="ERGOAI_BASE" location="/home/kifer/ERGOAI/" />
+  <property name="XSB_CONFIGURATION" value="x86_64-pc-linux-gnu" />
+  <property name="XSB_BIN_DIRECTORY"
+            location="${ERGOAI_BASE}/XSB/config/${XSB_CONFIGURATION}/bin" />
+  <property name="ERGODIR" location="${ERGOAI_BASE}/ErgoEngine/ErgoAI" />
+  <property name="ERGO_RUNNER" value="runergo"/>
+  <property name="FIDJI_MODULE" value="fidji" /> <!-- This should be passed to the java compilation... -->
+  <!--<property name="XSB_BIN_DIRECTORY" value="C:\\Users\\mc\\Desktop\\xsbApril7\\XSB\\config\\x64-pc-windows\\bin"/>-->
+  <!-- <property name="XSB_BIN_DIRECTORY" value="C:\\Users\\mc\\Desktop\\XSBApril5\\XSB\\config\\x86-pc-windows\\bin"/>-->
+  
+  <!-- <property name="bin.dir" location="tempCompiled" /> -->
+  <property name="bin.dir" location="tempCompiled" />
+  <property name="source.dir" location="src" />
+  <property name="testsource.dir" location="test" />
+  <property name="testresults.dir" value="testresults"/>
+  <property name="externalJars" value="externalJars"/>
+  <property name="mybase.dir" location="src/.." />
+  <property name="myGit.dir" location="${mybase.dir}/.." />
+  <condition property="build.destfile" value="ergoStudio.jar" else="interPrologStudio.jar">
+    <available file="${source.dir}/com/coherentknowledge" type="dir"/>
+  </condition>
+  <condition property="build.isFidji" value="true">
+    <available file="${source.dir}/com/coherentknowledge" type="dir"/>
+  </condition>
+
+  <condition property="isWindows">
+    <os family="windows" />
+  </condition>
+  <condition property="isNotWindows">
+    <or>
+      <os family="unix" />
+      <os family="mac" />
+    </or>
+  </condition>
+
+  <delete quiet="true" dir="${bin.dir}"/>
+  <mkdir dir="${bin.dir}" />
+
+  <target name="main" depends="jar"/>
+
+  <property environment="env"/>
+
+  <condition property="git.exists">
+      <or>
+    <!--
+        <available file="git" filepath="${env.PATH}"/>
+        <available file="git.exe" filepath="${env.PATH}"/>
+        <available file="git.exe" filepath="${env.Path}"/>
+      -->
+      </or>
+  </condition>
+
+  <target name="do.gitlog" if="git.exists">
+    <exec dir="${myGit.dir}" executable="git" outputproperty="fidji.build">
+      <arg value="log" />
+      <arg value="-1" />
+      <arg value="--pretty=format:%h" />
+    </exec> 
+  </target>
+  <target name="do.nolog" unless="git.exists">
+    <property name="fidji.build" value="unknown"/>
+  </target>
+
+  <target name="jar" depends="do.gitlog,do.nolog,compile">
+    <jar destfile="${build.destfile}" basedir="${bin.dir}" compress="true">
+      <manifest>
+     	<attribute name="Main-Class" value="com.declarativa.fiji.FijiPreferences" />
+     	<attribute name="Implementation-Version" value="${fidji.build}"/>
+      </manifest>
+    </jar>
+    <delete quiet="true" dir="${bin.dir}"/>
+  </target>
+
+  <pathconvert property="source.dir.forw" dirsep="/">
+    <path location="${source.dir}"/>
+  </pathconvert>
+
+  <target name="ergo2javaJar" depends="do.gitlog,do.nolog,compileI,compileXoverJ">
+    <jar destfile="ergo2java.jar" basedir="${bin.dir}" compress="true">
+      <manifest>
+      	<attribute name="Main-Class" value="com/coherentknowledge/fidji/XSBOnTopSubprocessEngine" />
+    	<attribute name="Implementation-Version" value="${fidji.build}"/>
+      </manifest>
+    </jar>
+    <delete quiet="true" dir="${bin.dir}"/>
+  </target>
+
+  <target name="compileXoverJ">
+    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+      <src path="${source.dir}/com/coherentknowledge/fidji" />
+      <include name="XSBOnTopSubprocessEngine.java" />
+      <include name="CtrlStyledOutputPane.java" />
+      <src path="${source.dir}/com/xsb" />
+      <include name="xj/*.java" />
+      <include name="xj/renderers/*.java" />
+      <include name="xj/util/*.java" />
+      <include name="xj/containers/*.java" />
+      <include name="interprolog/*.java" />
+      <classpath path="${source.dir}/com/declarativa/interprolog/interprolog.jar" />
+      <classpath path="${externalJars}/jhall.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-api-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/collections-generic-4.01.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-algorithms-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-graph-impl-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-io-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-visualization-2.0.1.jar" />
+    </javac>
+    <exec dir="${mybase.dir}" executable="${XSB_BIN_DIRECTORY}/xsb" 
+    	  inputstring="catch((compile('src/com/xsb/xj/prologCache.P'), compile('src/com/xsb/xj/xj2.P'), compile('src/com/xsb/xj/xjdisplays.P'), compile('src/com/xsb/xj/help/help.P'), compile('src/com/xsb/xj/help/readhtml.P')),_,sys_exit(1)), halt." failonerror="true"/>
+    <copy todir="${bin.dir}/com/xsb/xj">
+      <fileset dir="${source.dir}/com/xsb/xj" includes="*.xwam"/>
+    </copy>
+    
+    <copy todir="${bin.dir}">
+      <zipfileset src="${externalJars}/jhall.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-api-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/collections-generic-4.01.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-algorithms-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-graph-impl-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-io-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-visualization-2.0.1.jar"/>
+    </copy>
+  </target>
+  
+  <target name="interprologJar" depends="do.gitlog,do.nolog,compileI">
+    <jar destfile="interprolog.jar" basedir="${bin.dir}" compress="true">
+      <manifest>
+      	<attribute name="Main-Class" value="com.declarativa.interprolog.gui.XSBSubprocessEngineWindow" />
+    	<attribute name="Implementation-Version" value="${fidji.build}"/>
+      </manifest>
+    </jar>
+    <delete quiet="true" dir="${bin.dir}"/>
+  </target>
+
+  <target name="compileI">
+    <exec dir="${mybase.dir}" executable="${XSB_BIN_DIRECTORY}/xsb" 
+    	  inputstring="catch((dcg:set_dcg_terminal_functor(interprolog,ipGrammarChandler), compile('src/com/declarativa/interprolog/interprolog.P'), dcg:set_dcg_terminal_functor(dcg,'C'), compile('src/com/declarativa/interprolog/tests.P')),_,sys_exit(1)), halt." failonerror="true"/>
+    <property environment="environment"/>
+    <echo file="scripts/unixVariables.sh"># This is generated during build, no need to edit it:
+    export JAVA_BIN=${java.home}/bin
+    export XSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY}
+    export ERGODIR=${ERGODIR}
+    </echo>
+    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+      <src path="${source.dir}/com/declarativa/interprolog" />
+      <src path="${source.dir}/com/xsb/interprolog" />
+      <src path="${testsource.dir}" />
+      <include name="**/*.java" />
+      <classpath path="${testsource.dir}" />
+      <classpath path="${source.dir}" />
+      <classpath path="${externalJars}/junit-4.5.jar" />
+      <!-- For experimental builds: -->
+      <classpath path="${externalJars}/fidjiNLP/ejml-0.23.jar" />
+      <classpath path="${externalJars}/fidjiNLP/joda-time.jar" />
+      <classpath path="${externalJars}/fidjiNLP/xom.jar" />
+      <classpath path="${externalJars}/fidjiNLP/jollyday.jar" />
+      <classpath path="${externalJars}/fidjiNLP/stanford-corenlp-3.3.0-models.jar" />
+      <classpath path="${externalJars}/fidjiNLP/stanford-corenlp-3.3.0.jar" />
+      <classpath path="${externalJars}/owlapi-distribution-3.5.0.jar" />
+      <compilerarg value="-Xlint:unchecked" />
+    </javac>
+    <copy todir="${bin.dir}/com/declarativa/interprolog">
+      <fileset dir="${source.dir}/com/declarativa/interprolog" includes="*.xwam"/>
+    </copy>
+    <copy file="${source.dir}/com/declarativa/interprolog/tests.P" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy file="${source.dir}/com/declarativa/interprolog/interprolog.P" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy file="${source.dir}/com/declarativa/interprolog/interprolog.xwam" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy todir="${bin.dir}/com/declarativa/interprolog/gui">
+      <fileset dir="${source.dir}/com/declarativa/interprolog/gui" includes="*.xwam"/>
+      <fileset dir="${source.dir}/com/declarativa/interprolog/gui" includes="*.P"/>
+    </copy>
+    <copy todir="${bin.dir}/com/declarativa/interprolog/examples">
+      <fileset dir="${source.dir}/com/declarativa/interprolog/examples" includes="*.xwam"/>
+      <fileset dir="${source.dir}/com/declarativa/interprolog/examples" includes="*.P"/>
+    </copy>
+  </target>
+
+  
+  <!-- Compiles all .java files under the src and test directories, Prolog files too, and generates a couple of files -->
+  <target name="compile">
+    <exec dir="${mybase.dir}" executable="${XSB_BIN_DIRECTORY}/xsb" 
+    	  inputstring="catch((dcg:set_dcg_terminal_functor(interprolog,ipGrammarChandler), compile('src/com/declarativa/interprolog/interprolog.P'), dcg:set_dcg_terminal_functor(dcg,'C'), compile('src/com/declarativa/interprolog/gui/visualization.P'), compile('src/com/declarativa/interprolog/tests.P')),_,sys_exit(1)), halt." failonerror="true"/>
+    <exec dir="${mybase.dir}" executable="${XSB_BIN_DIRECTORY}/xsb" 
+    	  inputstring="catch((compile('src/com/xsb/xj/prologCache.P'), compile('src/com/xsb/xj/xj2.P'), compile('src/com/xsb/xj/xjdisplays.P'), compile('src/com/xsb/xj/help/help.P'), compile('src/com/xsb/xj/help/readhtml.P')),_,sys_exit(1)), halt." failonerror="true"/>
+    <exec dir="${mybase.dir}" executable="${XSB_BIN_DIRECTORY}/xsb" 
+           inputstring="catch((compile('src/com/declarativa/fiji/fidji.P'),compile('src/com/declarativa/fiji/myxxref.P'),compile('src/com/declarativa/fiji/fidjiRC.P')),_,sys_exit(1)), halt." failonerror="true"/>
+    <property environment="environment"/>
+    <echo file="scripts/unixVariables.sh"># This is generated during build, no need to edit it:
+    export JAVA_BIN=${java.home}/bin
+    export XSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY}
+    export ERGODIR=${ERGODIR}
+    </echo>
+    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+      <src path="${source.dir}" />
+      <src path="${testsource.dir}" />
+      <include name="**/*.java" />
+      <classpath path="${testsource.dir}" />
+      <classpath path="${source.dir}" />
+      <classpath path="${externalJars}/junit-4.5.jar" />
+      <classpath path="${externalJars}/jhall.jar" />
+      <classpath path="${externalJars}/rsyntaxtextarea.jar" />
+      <classpath path="${externalJars}/autocomplete.jar" />
+      <classpath path="${externalJars}/rstaui.jar" />
+      <classpath path="${externalJars}/juniversalchardet-1.0.3.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-api-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/collections-generic-4.01.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-algorithms-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-graph-impl-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-io-2.0.1.jar" />
+      <classpath path="${externalJars}/jung2_0_1minimal/jung-visualization-2.0.1.jar" />
+
+      <classpath path="${externalJars}/fidjiNLP/ejml-0.23.jar" />
+      <classpath path="${externalJars}/fidjiNLP/joda-time.jar" />
+      <classpath path="${externalJars}/fidjiNLP/xom.jar" />
+      <classpath path="${externalJars}/fidjiNLP/jollyday.jar" />
+      <classpath path="${externalJars}/fidjiNLP/stanford-corenlp-3.3.0-models.jar" />
+      <classpath path="${externalJars}/fidjiNLP/stanford-corenlp-3.3.0.jar" />
+      <classpath path="${externalJars}/owlapi-distribution-3.5.0.jar" />
+      <compilerarg value="-Xlint:unchecked" />
+    </javac>
+    <copy todir="${bin.dir}/com/declarativa/interprolog">
+      <fileset dir="${source.dir}/com/declarativa/interprolog" includes="*.xwam"/>
+    </copy>
+    <copy file="${source.dir}/com/declarativa/interprolog/tests.P" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy file="${source.dir}/com/declarativa/interprolog/interprolog.P" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy file="${source.dir}/com/declarativa/interprolog/interprolog.xwam" toDir="${bin.dir}/com/declarativa/interprolog"/>
+    <copy todir="${bin.dir}/com/declarativa/interprolog/gui">
+      <fileset dir="${source.dir}/com/declarativa/interprolog/gui" includes="*.xwam"/>
+      <fileset dir="${source.dir}/com/declarativa/interprolog/gui" includes="*.P"/>
+    </copy>
+    <copy todir="${bin.dir}/com/declarativa/interprolog/examples">
+      <fileset dir="${source.dir}/com/declarativa/interprolog/examples" includes="*.xwam"/>
+    </copy>
+    <copy todir="${bin.dir}/com/xsb/xj/images">
+      <fileset dir="${source.dir}/com/xsb/xj/images" includes="*"/>
+    </copy>
+    <copy todir="${bin.dir}/com/xsb/xj/help">
+      <fileset dir="${source.dir}/com/xsb/xj/help" includes="*.xwam"/>
+    </copy>
+    <copy todir="${bin.dir}/com/xsb/xj">
+      <fileset dir="${source.dir}/com/xsb/xj" includes="*.xwam"/>
+    </copy>
+    <copy todir="${bin.dir}/com/declarativa/fiji">
+      <!-- <fileset dir="${source.dir}/com/declarativa/fiji" includes="*.xwam,*.xml,*.gif,*.flr,*.png"/> -->
+      <fileset dir="${source.dir}/com/declarativa/fiji" includes="*.xwam,*.xml,*.gif,*.png"/>
+    </copy>
+    <copy todir="${bin.dir}/com/declarativa/fiji/reporting">
+      <fileset dir="${source.dir}/com/declarativa/fiji/reporting" includes="*.js,*.css,*.html,*.xml,*.gif,*.png"/>
+    </copy>
+    <copy failonerror="false" todir="${bin.dir}/com/coherentknowledge/fidji">
+      <fileset dir="${source.dir}/com/coherentknowledge/fidji" includes="*.xwam,*.xml,*.gif,*.png,*.jpg"/>
+      <!-- <fileset dir="${source.dir}/com/declarativa/fiji" includes=".flora_aux_files/*"/> -->
+      <fileset dir="${source.dir}/com/coherentknowledge/fidji" includes=".ergo_aux_files/*"/>
+    </copy>
+    <copy todir="${bin.dir}">
+      <zipfileset src="${externalJars}/rsyntaxtextarea.jar"/>
+      <zipfileset src="${externalJars}/autocomplete.jar"/>
+      <zipfileset src="${externalJars}/rstaui.jar"/>
+      <zipfileset src="${externalJars}/jhall.jar"/>
+      <zipfileset src="${externalJars}/juniversalchardet-1.0.3.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/collections-generic-4.01.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-algorithms-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-api-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-graph-impl-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-io-2.0.1.jar"/>
+      <zipfileset src="${externalJars}/jung2_0_1minimal/jung-visualization-2.0.1.jar"/>
+    </copy>
+    <copy todir="${bin.dir}">
+      <fileset dir="${source.dir}" includes="*.prefs"/>
+    </copy>
+  </target>
+
+  <target name="tests" depends="make-testresults-dir,jar"> 
+    <junit
+        fork="yes"
+        forkmode="once"
+        reloading="no"
+        haltonfailure="no"
+        printsummary="withOutAndErr"
+        timeout="60000"
+        maxmemory="512m"
+        showoutput="true" 
+        failureProperty="test.failed">
+      <jvmarg value="-DXSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY}"/>
+      <jvmarg value="-Djava.library.path=${XSB_BIN_DIRECTORY}"/>
+      <classpath path="ergoStudio.jar" />
+      <classpath path="${externalJars}/junit-4.5.jar" />
+      <batchtest todir="${testresults.dir}">
+        <fileset dir="${testsource.dir}" includes="**/XSBSubprocessEngineTest.java"/>
+        <!-- NativeEngine working neither for XSB > 3.3.7 nor for Windows: -->
+        <!--<fileset dir="${testsource.dir}" includes="**/XSBNativeEngineTest.java,**/XSBSubprocessEngineTest.java"/> -->
+      </batchtest>
+      <formatter type="plain" usefile="false" />
+      <formatter type="xml"/>
+    </junit>
+  </target>
+  
+  <target name="make-testresults-dir">
+    <mkdir dir="${testresults.dir}"/>
+  </target>
+
+  <target name="testreport">
+    <junitreport todir="${testresults.dir}">
+      <fileset dir="${testresults.dir}">
+	<include name="**/TEST-*.xml"/>
+      </fileset>
+      <report format="frames" todir="${testresults.dir}/html"/>
+    </junitreport>
+    <echo message="point your browser to ${testresults.dir}/html/index.html to see results"/>
+  </target>
+
+  <target name="fijijavadoc"> <!-- Fiji and InterProlog -->
+    <javadoc access="public" destdir="fijijavadoc" author="true" version="true" use="true" windowtitle="InterProlog Studio and Java Bridge"
+	     link = "http://docs.oracle.com/javase/6/docs/api/">      
+      <fileset dir="src/com/declarativa" defaultexcludes="yes">            
+	<include name="**/*.java"/>                  
+      </fileset>    
+      <fileset dir="src/com/xsb" defaultexcludes="yes">            
+	<include name="**/*.java"/>                  
+      </fileset>    
+    </javadoc>
+  </target>
+
+  <target name="ipjavadoc"> <!-- InterProlog bridge -->
+    <javadoc access="public" destdir="ipjavadoc" author="true" version="true" use="true" windowtitle="InterProlog Java Bridge"
+	     link = "http://docs.oracle.com/javase/6/docs/api/">      
+      <fileset dir="src/com/declarativa/interprolog" defaultexcludes="yes">            
+	<include name="**/*.java"/>                  
+      </fileset>    
+      <fileset dir="src/com/xsb/interprolog" defaultexcludes="yes">            
+	<include name="**/*.java"/>                  
+      </fileset>    
+    </javadoc>
+  </target>
+
+  <target name="javadoc"> <!-- Fidji and Fiji and InterProlog -->
+    <javadoc access="public" destdir="javadoc" author="true" version="true" use="true" windowtitle="Fidji, InterProlog Studio and Java Bridge"
+	     link = "http://docs.oracle.com/javase/6/docs/api/">      
+      <fileset dir="src" defaultexcludes="yes">            
+	<include name="**/*.java"/>                  
+      </fileset>    
+    </javadoc>
+  </target>
+
+</project>

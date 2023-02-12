@@ -1,0 +1,44 @@
+man(Socrates).
+mortal(?X) :- man(?X).
+age(Socrates,56) and  home(Socrates,Athens).
+student(Socrates,Plato) and student(Socrates,Xenophon).
+man(Plato) and man(Xenophon).
+age(Plato,27). age(Xenophon,27).
+philosopher(Xenophon).
+talksAbout(Xenophon,Xenophon).
+home(father(Socrates),Athens).
+home(father(father(Socrates)),Athens).
+avgAge(?AvgAge) :- 
+   ?AvgAge = avg{ ?Y | man(?E), age(?E,?Y) }.
+
+?- mortal(?X).
+/* ?X = Plato
+?X = Socrates
+?X = Xenophon
+*/
+
+?- age(?X,?Y).
+/* ?X = Plato
+?Y = 27
+
+?X = Socrates
+?Y = 56
+
+?X = Xenophon
+?Y = 27
+*/
+
+?- home(?X,?Y).
+/* ?X = Socrates
+?Y = Athens
+
+?X = father(Socrates)
+?Y = Athens
+
+?X = father(father(Socrates))
+?Y = Athens
+*/
+
+?- avgAge(?AvgAge).
+/* ?AvgAge = 36.6667
+*/

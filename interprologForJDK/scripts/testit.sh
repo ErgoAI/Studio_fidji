@@ -1,0 +1,1 @@
+CURRENT_DIRECTORY=`pwd`;cd ..;ant tests;cd $CURRENT_DIRECTORY

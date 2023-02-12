@@ -1,0 +1,2 @@
+. unixVariables.sh
+${JAVA_BIN}/java -Xss2M -Xmx1800M -Djava.net.preferIPv4Stack=true -DFLORADIR=/Users/mc/git/coherent-engine/flora2 -classpath ${CLASSPATH}:../ergoStudio.jar com.declarativa.interprolog.gui.FloraSubprocessEngineWindow $1 ${XSB_BIN_DIRECTORY}/xsb

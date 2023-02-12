@@ -1,0 +1,694 @@
+/***************************************************************/
+:- compiler_options([ciao_directives]).
+
+:- export 
+	cache_set_auto_commit/1,
+	cache_count/2, cache_count/4,
+	cache_range/3, cache_range/5,
+	nocache_but_notify/2,
+	just_notify/2,
+	cache_remove_notifier/4,
+	cache_index/4,
+	if_caching/0,
+	cache_invalidate/1,
+	cache_invalidate/2,
+	cache_invoke_pending_notifications/0,
+	generate_cache_invalidators/1,
+	cache_invalidate_for/1,
+	cache_print/0, cache_print_goals/0,
+	cache_remove_unused_caches/0.
+
+:- comment(module, " @section{Caching}
+	   
+XSB predicates are provided that support caching of subgoals.  These
+predicates are used in XJ to support interface programming, to allow
+the GUI to depend on XSB to provide tuples from a subgoal on demand.
+Caching allows the caller to ask for a range of tuples satisfying a
+subgoal and to be guaranteed that tuples will be provided in a
+consistent fixed order.
+	   
+There are also predicates that help support invalidation of cached
+goals.  For example, when a cached subgoal is defined by rules, and a
+predicate used in the definition is modified by an assert or retract,
+and this would effect a cached selection of this subgoal, that cache
+should be invalidated.  ").
+	   
+:- import term_set_arg/4 from machine.
+:- import term_new_mod/3 from machine.
+:- import parsort/4 from machine.
+:- import new_trie/1, delete_trie/1, trie_intern/5, trie_intern/2, trie_interned/4,
+	trie_interned/2, trie_unintern/2 from intern.
+:- import for/3, member/2 from basics.
+:- import numbervars/4 from num_vars.
+:- import call0/1 from machine.
+/*:- import retract_nr/1, reclaim_space/1 from assert. */
+:- import if_predicate_defined/1 from stdutils.
+:- import immutable/1, mutable/1, cached/1 from usermod.
+:- import cache_inv/2, cache_inv/3, cache_inval/2 from usermod.
+
+:- dynamic cache_inv(_,_).
+:- dynamic cache_inv(_,_,_).
+:- dynamic cache_trie(_).
+:- index(cache_trie/1,0).
+
+:- comment(cache_set_auto_commit/1,
+"@tt{cache_set_auto_commit(OnOrOff)} sets the caching notification
+mode on or off.  If it is called with a variable, it returns the
+current auto_commit state.  If auto_commit is on, then every update
+that invalidates a cache causes the notifications to be invoked
+(sent).  If auto_commit is off, then notifications are accumulated as
+pending but not sent.  They are sent with an explicit call to
+@tt{cache_invoke_pending_notifications/0}.  If there are pending
+notifications when @tt{cache_set_auto_commit/1} is called, it
+fails.").
+	   
+:- dynamic auto_commit/1.
+:- assert(auto_commit(on)).
+cache_set_auto_commit(Commit) :-
+	(var(Commit)
+	 ->	auto_commit(Commit)
+	 ;	(Commit == on ; Commit == off)
+	 ->	\+ pending_notifications(_),
+		retractall(auto_commit(_)),
+		assert(auto_commit(Commit))
+	).
+
+/* Internal predicate: :- comment(cache_fill/4,
+"@tt{cache_fill(Goal,Cache,GoalPtr,Skel)} takes a Goal, calls it and
+fills a cache with the values it returns.  It uses trie_intern
+routines to keep the cached values in a trie, Cache, and it keeps only
+values for the variables in the Goal.  GoalPtr is returned and is a
+unique identifier for this goal Goal in the cache (being a leaf
+pointer in a trie.)  Skel is the skeleton with the free variables in
+Goal.").  */
+	   
+cache_fill(Goal,Cache,Sort,GoalPtr,Skel) :-
+%%	writeln(userout,cache_fill(Goal)),
+	(cache_trie(Cache) -> true ; cache_init(Cache)),
+	trie_intern('$goal'(cache,Goal,Sort),Cache,GoalPtr,Old,Skel),
+	(Old =\= 0		% already in cache
+	 ->	true
+	 ; atomic(Sort)
+	 ->	init_ctr(Ctr,0),
+		%%writeln(filling_cache(Goal,Sort)),
+		(call(Goal),
+		 increment_ctr(Ctr,NewVal),
+		 trie_intern('$cache'(GoalPtr,NewVal,Skel),Cache),
+		 fail
+		 ;	
+		 ctr_val(Ctr,Count),
+		 trie_intern('$count'(GoalPtr,Count),Cache)
+		)
+	 ;      ((same_goal_in_cache(Goal,Cache,GoalPtr,SameGoalPtr)
+		  ->	 findall(Skel,trie_interned('$cache'(SameGoalPtr,_,Skel),Cache,_L,_S),Skels)
+		  ;	 findall(Skel,call(Goal),Skels)
+		 ),
+		 cvt_sortvars_to_sortpos(Goal,Sort,SortPos),
+		 parsort(Skels,SortPos,1,SSkels),
+		 cache_fill_list(SSkels,Cache,GoalPtr,0,Count),
+		 trie_intern('$count'(GoalPtr,Count),Cache),
+		 fail
+		 ;	
+		 true
+		)
+	).  %%,writeln(userout,filled).
+
+cvt_sortvars_to_sortpos(Goal,Sort,SortPos) :-
+	copy_term([Goal|Sort],[NGoal|NSort]),
+	numbervars([NGoal|NSort],1,_,[attvar(bind)]),
+	flatten_devar(NSort,none,SortPos,[]).
+
+flatten_devar('$VAR'(I),asc,[asc(I)|SortPos],SortPos) :- !.
+flatten_devar('$VAR'(I),desc,[desc(I)|SortPos],SortPos) :- !.
+flatten_devar(asc(T),none,SortPos0,SortPos) :- !,
+	flatten_devar(T,asc,SortPos0,SortPos).
+flatten_devar(desc(T),none,SortPos0,SortPos) :- !,
+	flatten_devar(T,desc,SortPos0,SortPos).
+flatten_devar(T,_Dir,SortPos,SortPos) :- atomic(T), !.
+flatten_devar([T1|Ts],Dir,SortPos0,SortPos) :- !,
+	flatten_devar(T1,Dir,SortPos0,SortPos1),
+	flatten_devar(Ts,Dir,SortPos1,SortPos).
+flatten_devar(T,Dir,SortPos0,SortPos) :-
+	T =.. [_|Args],
+	flatten_devar(Args,Dir,SortPos0,SortPos).
+
+:- import variant/2 from subsumes.
+same_goal_in_cache(Goal,Cache,GoalPtr,SameGoalPtr) :-
+	copy_term(Goal,CGoal),
+	trie_interned('$goal'(cache,Goal,_),Cache,SameGoalPtr,Skel),
+	GoalPtr \== SameGoalPtr,
+	is_most_general_term(Skel),
+	variant(Goal,CGoal),
+	!.  % get rid of possible trie_interned choicepoint
+
+cache_fill_list([],_Cache,_GoalPtr,Cnt,Cnt).
+cache_fill_list([Skel|Skels],Cache,GoalPtr,Cnt0,Cnt) :-
+	Cnt1 is Cnt0 + 1,
+	trie_intern('$cache'(GoalPtr,Cnt1,Skel),Cache),
+	cache_fill_list(Skels,Cache,GoalPtr,Cnt1,Cnt).
+
+:- comment(cache_count/2, "@tt{cache_count(Goal,Count)} calls
+@tt{cache_count(Goal,none,true,Count}.").
+
+cache_count(Goal,Count) :-
+	cache_count(Goal,none,true,Count).
+
+:- comment(cache_count/4,
+"@tt{cache_count(Goal,SortTemp,Notifier,Count)} takes a goal Goal, a
+sort Template, and a Notifier Goal, and returns the number of tuples
+returned by Goal.  If the goal has been cached, this is found from the
+cache; if not, it fills the cache and returns the count.  The cache is
+sorted according to the SortTemplate: if it is a constant, it is
+unsorted; if the main functor symbol of SortTemp is asc, the tuples
+are sorted in ascending order; otherwise they are sorted in descending
+order.  Notifier is a goal that will be called when this cache entry
+becomes invalid due to underlying updates.").
+
+cache_count(MGoal,Sort,Notifier,Count) :-
+%%	writeln(userout,cache_count(MGoal,Sort,Notifier,Count)),
+	incorp_mod(MGoal,Goal),
+	cache_fill(Goal,Cache,Sort,GoalPtr,_),
+	(Notifier == true
+	 ->	true
+	 ;	trie_intern('$notify'(GoalPtr,Notifier),Cache)
+	),
+	once(trie_interned('$count'(GoalPtr,Count),Cache)).
+
+:- comment(cache_range/3, "@tt{cache_range(Goal,From,To)} calls
+	   @tt{cache_range(Goal,none,true,From,To)}.").
+
+cache_range(Goal,From,To) :-
+	cache_range(Goal,none,true,From,To).
+
+:- comment(cache_range/5,
+"@tt{cache_range(Goal,SortTemp,Notifier,From,To)} takes a goal Goal, a
+sort template, a notifier goal, and a pair of integers From and To
+which indicates a range of tuples from Goal to return.  For example, a
+call to cache_range(p(X,Y),25,50) returns 26 tuples, bindings for X
+and Y, from the call to p(X,Y) (assuming it includes at least 50
+tuples.)  If this is the first call to Goal, then it's called and the
+entire cache is filled, and then the requested range is returned.  If
+this goal is already in the cache, then the tuples are retrieved from
+the cache and returned.  SortTemp and Notifier are as described in
+@tt{cache_count/4}.").
+
+cache_range(MGoal,Sort,Notifier,From,To) :-
+%%	writeln(userout,cache_range(MGoal,Sort,Notifier,From,To)),
+	incorp_mod(MGoal,Goal),
+	cache_fill(Goal,Cache,Sort,GoalPtr,Skel),
+	(Notifier == true
+	 ->	true
+	 ;	trie_intern('$notify'(GoalPtr,Notifier),Cache)
+	),
+%%	writeln(userout,ranged),
+	for(Line,From,To),
+	trie_interned('$cache'(GoalPtr,Line,Skel),Cache).
+
+:- comment(nocache_but_notify/2,
+"@tt{nocache_but_notify(+Goal,+Notifier)} saves Notifier to call when
+this goal is invalidated.  It then calls @tt{Goal}.  This is for use
+instead of @tt{cache_range/5}, when notification on invalidation is
+required, but caching is not desired.").
+
+nocache_but_notify(MGoal,Notifier) :-
+%%	writeln(userout,nocache_but_notify(MGoal,Notifier)),
+	incorp_mod(MGoal,Goal),
+	(cache_trie(Cache) -> true ; cache_init(Cache)),
+	trie_intern('$goal'(nocache,Goal,none),Cache,GoalPtr,_Old,_Skel),
+	(Notifier == true
+	 ->	true
+	 ;	trie_intern('$notify'(GoalPtr,Notifier),Cache)
+	),
+	call(Goal).
+
+:- comment(just_notify/2, "@tt{just_notify(+Goal,+Notifier)} saves
+Notifier to call when this goal is invalidated.  It does NOT call the
+@tt{Goal}.").
+
+just_notify(MGoal,Notifier) :-
+%%	writeln(userout,just_notify(MGoal,Notifier)),
+	incorp_mod(MGoal,Goal),
+	(cache_trie(Cache) -> true ; cache_init(Cache)),
+	trie_intern('$goal'(nocache,Goal,none),Cache,GoalPtr,_Old,_Skel),
+	(Notifier == true
+	 ->	true
+	 ;	trie_intern('$notify'(GoalPtr,Notifier),Cache)
+	).
+
+:- comment(cache_remove_notifier/4,
+"@tt{cache_remove_notifier(+Goal,+Sort,+Notifier,+IfCache)} is called
+with a Goal, which must be a cached (or nocached) goal, a sort term
+(as elsewhere), a notifier term, and an indication of whether the goal
+is cached (cache) or not cached (nocache). The notifier is assumed to
+be assoiciated with this goal, and @tt{cache_remove_notifier} removes
+that notifier.  It could delete the cache if there are no other
+notifiers associated with it, but at this time, this is not done.").
+
+cache_remove_notifier(MGoal,Sort,Notifier,IfCache) :-
+%%	writeln(userout,cache_remove_notifier(MGoal,Sort,Notifier,IfCache)),
+	incorp_mod(MGoal,Goal),
+	(cache_trie(Cache) -> true ; cache_init(Cache)),
+	trie_intern('$goal'(IfCache,Goal,Sort),Cache,GoalPtr,Old,_Skel),
+	(Old =\= 0
+	 ->	(trie_interned('$notify'(GoalPtr,Notifier),Cache,NotifyPtr,_S)
+		 ->	trie_unintern(Cache,NotifyPtr)
+		        %% could remove cache if no more notifiers
+		 ;	(pending_notifications(Notifier)
+			 ->	%% see comments for retractall_nr/1
+				retractall_nr(pending_notifications(Notifier))
+			 ;	%% writeln('++Warning: Trying to remove notifier that is not there'),
+				fail
+			)
+		)
+	 ;	trie_unintern(Cache,GoalPtr),
+		(pending_notifications(Notifier)
+		 ->	retractall_nr(pending_notifications(Notifier))
+		 ;	%% writeln('++Warning: Trying to remove notifier for uncached goal'(Goal,Sort,Notifier,IfCache)),
+			fail
+		)
+	).
+
+%% doing retractall_nr/1 instead of retractall/1 because removing from
+%% pending_notifications/1 list at the time when send_pending_notifications/0
+%% backtracks through it.
+%%retractall_nr(G):- retract_nr(G), fail.
+%%retractall_nr(_).
+retractall_nr(G) :- retractall(G).
+
+:- comment(cache_index/4, "@tt{cache_index(+Goal,+Sort,?Skel,-Index)}
+is called with a Goal, which must be a cached goal, a sort term (as
+elsewhere), and a (normally bound) skeleton, and cache_index will
+return the index of the tuple in the skeleton.  This can be used
+nondeterministically, but I'm not sure how well it would work.").
+
+cache_index(MGoal,Sort,Skel,Index) :-
+%%	writeln(userout,cache_index(MGoal)),
+	incorp_mod(MGoal,Goal),
+	cache_fill(Goal,Cache,Sort,_,_),
+	%%writeln(call_cache_index(Goal,Sort,Skel,Index)),
+	once(trie_interned('$goal'(cache,Goal,Sort),Cache,GoalPtr,Skel)),
+	once(trie_interned('$cache'(GoalPtr,Index,Skel),Cache)).
+
+
+:- comment(if_caching/0, "@tt{if_caching} is true if any cache has
+been created.").
+
+if_caching :- cache_trie(_).
+
+:- comment(cache_invalidate/1, "@tt{cache_invalidate(?Goal)} removes
+from the cache all goals (and their answers) that unify with Goal. If
+auto_commit is set on, then it invokes the notifiers of the
+invalidated caches.  If auto_commit is set off, then the notifiers are
+saved as pending.").
+
+cache_invalidate(MGoal) :-
+	incorp_mod(MGoal,Goal),
+	cache_trie(Cache),
+	(\+trie_interned('$goal'(IfCache,Goal,_),Cache)
+	 ->	true
+	 ;	%%writeln(userout,cache_invalidate(MGoal)),
+		findall([IfCache|GoalPtr],
+			trie_interned('$goal'(IfCache,Goal,_),Cache,GoalPtr,_),
+			GoalPtrs),
+		(member([IfCache|GoalPtr],GoalPtrs),
+		 trie_unintern(Cache,GoalPtr),
+		 IfCache = cache,
+		 remove_count(Cache,GoalPtr),
+		 remove_tuples(Cache,GoalPtr),
+		 fail
+		 ;	
+		 notify_all_parties(Cache,GoalPtrs),
+		 fail
+		 ;	
+		 true
+		)
+	).
+
+cache_invalidate(MGoal,FiltCond) :-
+	incorp_mod(MGoal,Goal),
+	cache_trie(Cache),
+	(\+((trie_interned('$goal'(IfCache,Goal,_),Cache),call0(FiltCond)))
+	 ->	true
+	 ;	%%writeln(userout,cache_invalidate(MGoal,FiltCond)),
+		findall([IfCache|GoalPtr],
+			(trie_interned('$goal'(IfCache,Goal,_),Cache,GoalPtr,_),
+			 once(FiltCond)
+			),
+			GoalPtrs),
+		(member([IfCache|GoalPtr],GoalPtrs),
+		 trie_unintern(Cache,GoalPtr),
+		 IfCache = cache,
+		 remove_count(Cache,GoalPtr),
+		 remove_tuples(Cache,GoalPtr),
+		 fail
+		 ;	
+		 notify_all_parties(Cache,GoalPtrs),
+		 fail
+		 ;	
+		 true
+		)
+	).
+
+remove_count(Cache,GoalPtr) :-
+	findall(CntPtr,
+		trie_interned('$count'(GoalPtr,_Cnt),Cache,CntPtr,_),
+		CntPtrs),
+	member(CntPtr,CntPtrs),
+	trie_unintern(Cache,CntPtr),
+	fail.
+remove_count(_Cache,_GoalPtr).
+
+remove_tuples(Cache,GoalPtr) :-
+	findall(EntPtr,
+		trie_interned('$cache'(GoalPtr,_,_),Cache,EntPtr,_),
+		EntPtrs),
+	member(EntPtr,EntPtrs),
+	trie_unintern(Cache,EntPtr),
+	fail.
+remove_tuples(Cache,GoalPtr) :-
+	findall(EntPtr,
+		trie_interned('$cache'(GoalPtr,_),Cache,EntPtr,_),
+		EntPtrs),
+	member(EntPtr,EntPtrs),
+	trie_unintern(Cache,EntPtr),
+	fail.
+remove_tuples(_Cache,_GoalPtr).
+
+notify_all_parties(Cache,GoalPtrs) :-
+	findall(notify(NotifPtr,Notify),
+		(member([_IfCache|GoalPtr],GoalPtrs),
+		 trie_interned('$notify'(GoalPtr,Notify),Cache,NotifPtr,_)),
+		NotifPairs),
+	trie_unintern_all_notif_and_extract(NotifPairs,Cache,Notifys,[]),
+	sort(Notifys,SNotifys),
+	notify_all(SNotifys).
+
+trie_unintern_all_notif_and_extract([],_,[],[]).
+trie_unintern_all_notif_and_extract([notify(NotifPtr,Notify)|NotifPairs],
+				    Cache,[Notify|Notifys0],Notifys) :-
+	trie_unintern(Cache,NotifPtr),
+	trie_unintern_all_notif_and_extract(NotifPairs,Cache,Notifys0,Notifys).
+
+notify_all(NotifyGoals) :-
+	(auto_commit(on)
+	 ->	%%%send_pending_notifications, % should not happen
+		send_current_notifications(NotifyGoals)
+	 ;	add_pending_notifications(NotifyGoals)
+	).
+
+
+:- dynamic pending_notifications/1.
+
+add_pending_notifications([]).
+add_pending_notifications([Notify|Notifications]) :-
+	(pending_notifications(Notify)
+	 ->	true
+	 ;	assert(pending_notifications(Notify))
+	),
+	add_pending_notifications(Notifications).
+
+:- comment(cache_invoke_pending_notifications/0,
+"@tt{cache_invoke_pending_notifications} causes all pending
+notifications to be invoked (sent).").
+cache_invoke_pending_notifications :-
+	send_pending_notifications.
+
+/**send_pending_notifications :-
+	retract(pending_notifications(Notify)),
+	writeln(calling(Notify)),
+	call0(Notify),
+	fail.
+send_pending_notifications:- reclaim_space(pending_notifications(_)).
+***/
+send_pending_notifications :-
+	findall(Notify,pending_notifications(Notify),Notifiers),
+	(member(Notify,Notifiers),
+	 once(pending_notifications(Notify)),
+	 call0(Notify),
+	 fail
+	 ;
+	 pending_notifications(Notify),\+member(Notify,Notifiers),
+	 writeln(userout,'NEW NOTIFIER WHILE NOTIFYING: ERROR'(Notify)),
+	 fail
+	).
+send_pending_notifications:-
+	retractall(pending_notifications(_)).
+
+send_current_notifications([]).
+send_current_notifications([Notify|Notifications]) :-
+	call(Notify),
+	send_current_notifications(Notifications).
+
+%% routines for counting
+init_ctr('$ctr'(InitVal),InitVal).
+ctr_val('$ctr'(Val),Val).
+increment_ctr(Term,NewVal) :-
+	ctr_val(Term,OldVal),
+	NewVal is OldVal+1,
+	term_set_arg(Term,1,NewVal,1).
+
+%% initialize cache system by getting the trie to use
+cache_init(Cache) :-
+	(cache_trie(OldCache)
+	 ->	delete_trie(OldCache),
+		retractall(cache_trie(_))
+	 ;	true
+	),
+	new_trie(Cache),
+	trie_intern(junk,Cache,_,_,_),
+	assert(cache_trie(Cache)).
+
+:- comment(cache_print_goals/0,"@tt{cache_print_goals} prints out all
+goals that are currently in the cache and the count of tuples in
+each.").
+
+cache_print_goals :-
+	cache_trie(Cache),
+	trie_interned('$goal'(X,Goal,_),Cache,GoalPtr,_Skel),
+	numbervars(Goal,0,_,[attvar(bind)]),
+	writeq(Goal - X), /* write(': '),
+	trie_interned('$count'(GoalPtr,Count),Cache),
+	write(Count), */ writeln(' tuples'),
+	cache_print_notifiers(Cache,GoalPtr),
+	fail.
+cache_print_goals.
+
+cache_print_notifiers(Cache,GoalPtr) :-
+	(trie_interned('$notify'(GoalPtr,Notify),Cache),
+	writeln('$notify'(Notify)),
+	fail
+	;
+	true).
+
+%%incorp_mod(?MGoal,-Goal)
+incorp_mod(MGoal,Goal) :-
+	(var(MGoal)
+	 ->	Goal = MGoal
+	 ; MGoal = Mod:Term
+	 ->	term_new_mod(Mod,Term,Goal)
+	 ;	Goal = MGoal
+	).
+
+:- comment(cache_print/0,"@tt{cache_print} prints out all goals that
+are currently in the cache and all their tuples.  (This is mostly a
+debugging predicate, since normally one doesn't want to print so much
+data.").
+
+cache_print :-
+	cache_trie(Cache),
+	trie_interned('$goal'(_,Goal,_),Cache,GoalPtr,Skel),
+	nl,
+	trie_interned('$count'(GoalPtr,Count),Cache),
+	write(Count),writeln(' tuples'),
+	for(Line,1,Count),
+	trie_interned('$cache'(GoalPtr,Line,Skel),Cache),
+	write(Line),write(': '),writeln(Goal),
+	fail.
+cache_print.
+
+:- comment(cache_remove_unused_caches/0,"@tt{cache_remove_unused_caches} 
+removes all caches that do not have notifiers.").
+cache_remove_unused_caches:-
+	cache_trie(Cache),
+	findall(c(IfCache,GoalPtr,Goal), cache_unused_cache(Cache,IfCache,GoalPtr,Goal), GoalPtrs),
+	member(c(IfCache,GoalPtr,Goal), GoalPtrs),
+	write('removing cache for goal '),writeln(Goal),
+	trie_unintern(Cache,GoalPtr),
+	IfCache = cache,
+	remove_count(Cache,GoalPtr),
+	remove_tuples(Cache,GoalPtr),
+	fail.
+cache_remove_unused_caches.
+
+cache_unused_cache(Cache,IfCache,GoalPtr,Goal):-
+	trie_interned('$goal'(IfCache,Goal,_),Cache,GoalPtr,_),
+	\+(trie_interned('$notify'(GoalPtr,_Notify),Cache)).
+
+
+/* The following predicate generates rules to invalidate cached
+predicates that are rule-defined due to changes to predicates used to
+define them. */
+:- comment(generate_cache_invalidators/1,
+"
+@subsection{Cache Invalidation}
+
+This is the beginning of routines to support invalidating caches that
+contain tuples from goals that are defined by rules when predicates
+used to define the cached goal is modified by assert or retract.
+
+For example, if we have a rule defining p(X,Y) :- r(X,Z),s(Z,Y). and
+we are caching a call to p/2.  If s/2 is modified in such a way that
+the cache for a p/2 goal may be changed, we want to invalidate the
+cache for that goal.
+
+The approach is to create a predicate cache_inv/2 that for each cached
+goal, gives for each form of mutable goal, the forms of the cached
+goals that should be invalidated.  So for the example above, if s/2 is
+mutable, we will have a fact: cache_inv(s(_,Y),p(_,Y)). which
+indicates that if, say, s(b,a) is asserted, then all goals of the form
+p(_,a) in the cache must be invalidated.
+
+@tt{generate_cache_invalidators(File)} generates the facts for
+@tt{cache_inv/2}.  The file it is given must contain the rules that
+define the cached predicates. It must in addition define 3 more
+predicates: cached/1 which provides the skeletons of all the cached
+predicates; mutable/1 which provides the skeletons of all predicates
+that can be modified; and immutable/1 which contains the skeletons of
+all that are used in the definitions of the cached predicates but not
+defined in this file.  It need not include built_in predicates.
+Predicates in immutable/1 are assumed to be universally true.
+@tt{generate_cache_invalidators(File) dynamically loads the indicated
+File and generates a file called cache_inv_gen.P that contains the
+definition of cache_inv/2.  The algorithm used is quite simple.  It
+can do a little optimization for simple selections, but in more
+complex cases will just invalidate all cached goals for a predicate.
+
+In File, the user may also place cache_inval/2 facts.  These are
+user-defined invalidation facts of the same form as will be generated
+for cache_inv/2 in the external file.  These facts are simply checked
+to be sure the first argument is a mutable predicate term and the
+second is a cached predicate term.  Otherwise they are taken as given.
+
+The algorithm generates cache_inval facts for all cached predicates
+that do not have facts defined for them in cache_inval/2.  (That is,
+if the user gives explicit invalidate facts, then none are
+automatically generated.)
+
+").
+
+:- dynamic cache_rule/2.
+:- index(cache_rule/2,trie).
+
+generate_cache_invalidators(File) :-
+	new_trie(Trie),
+	load_dyn(File),
+	generate_cache_invalidators1(Trie),
+	delete_trie(Trie).
+
+generate_cache_invalidators1(Trie) :-
+	cached(CachedGoal),
+	(if_predicate_defined(cache_inval(_,_))
+	 ->	\+ cache_inval(_,CachedGoal)
+	 ;	true
+	),
+	abolish_table_pred(cache_to_invalidate(_,_)),
+	cache_to_invalidate(CachedGoal,UpdGoal),
+	nonvar(UpdGoal),
+	((trie_interned((UpdGoal,CachedGoal),Trie,_L,Skel),
+	  \+is_most_general_term(Skel))
+	 ->	true
+	 ;	trie_intern((UpdGoal,CachedGoal),Trie,Leaf,Old,Skel),
+		Old =:= 0,
+		findall(NLeaf,
+			(trie_interned((UpdGoal,CachedGoal),Trie,NLeaf,NSkel),
+			 Leaf \== NLeaf,
+			 \+is_most_general_term(NSkel)),
+			NLeaves),
+		(member(NLeaf,NLeaves),
+		 trie_unintern(Trie,NLeaf),
+		 fail
+		 ;	
+		 true
+		)
+	),
+	fail.
+generate_cache_invalidators1(Trie) :-
+	tell('cache_inv_gen.P'),
+	write_canonical((:-index(cache_inv/2,trie))),writeln('.'),
+	(trie_interned((UpdGoal,CachedGoal),Trie),
+	 write_canonical(cache_inv(UpdGoal,CachedGoal)),
+	 writeln('.'),
+	 fail
+	 ;	
+	 if_predicate_defined(cache_inval(_,_)),
+	 cache_inval(UpdGoal,CachedGoal),
+	 (mutable(UpdGoal),cached(CachedGoal)
+	  ->	 write_canonical(cache_inv(UpdGoal,CachedGoal)),
+		 writeln('.'),
+		 fail
+	  ;	 telling(OF),tell(userout),
+		 write('Invalid cache_inval/2 pair. '),
+		 numbervars(UpdGoal+CachedGoal,0,_,[attvar(bind)]),
+		 write(UpdGoal), write(' is not mutable, or'),
+		 write(CachedGoal), writeln(' is not cached'),
+		 told, tell(OF),
+		 fail
+	 )
+	 ;	
+	 told
+	).
+
+:- table cache_to_invalidate/2.
+
+cache_to_invalidate(true,_) :- !.
+cache_to_invalidate((A,B),UpdGoal) :- !,
+	cache_to_invalidate(A,UpdGoal),
+	cache_to_invalidate(B,UpdGoal).
+cache_to_invalidate((A;B),UpdGoal) :- !,
+	(cache_to_invalidate(A,UpdGoal)
+	 ;	
+	 cache_to_invalidate(B,UpdGoal)
+	).
+cache_to_invalidate((A->B;C),UpdGoal) :- !,
+	cache_to_invalidate(A,UpdGoal),
+	(cache_to_invalidate(B,UpdGoal)
+	 ;	
+	 cache_to_invalidate(C,UpdGoal)
+	).
+cache_to_invalidate((A->B),UpdGoal) :- !,
+	cache_to_invalidate(A,UpdGoal),
+	cache_to_invalidate(B,UpdGoal).
+cache_to_invalidate(\+A,UpdGoal) :- !,
+	cache_to_invalidate(A,UpdGoal).
+cache_to_invalidate(X=Y,_UpdGoal) :- !, X=Y.
+cache_to_invalidate(A,_UpdGoal) :- predicate_property(A,built_in), !.
+cache_to_invalidate(A,UpdGoal) :-
+	(mutable(A)
+	 ->	(var(UpdGoal)
+		 ->	(UpdGoal = A
+			 ;	
+			 true
+			)
+		 ;	true
+		) 
+	 ;	immutable(A)
+	 ->	true
+	 ;	clause(A,B),
+		cache_to_invalidate(B,UpdGoal)
+	).
+
+:- comment(cache_invalidate_for/1, "ttt{cache_invalidate_for(UpdGoal)}
+assumes cache_inv/2 is defined, and uses it to invalidate all caches
+that could be changed by an assert or retract of (any instance of)
+UpdGoal.").
+
+cache_invalidate_for(MUpdGoal) :-
+	incorp_mod(MUpdGoal,UpdGoal),
+	cache_inv(UpdGoal,CachedGoal),
+	cache_invalidate(CachedGoal),
+	fail.
+cache_invalidate_for(UpdGoal) :-
+	cache_inv(UpdGoal,CachedGoal,FilterCond),
+	cache_invalidate(CachedGoal,FilterCond),
+	fail.
+cache_invalidate_for(_).

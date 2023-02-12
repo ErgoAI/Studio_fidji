@@ -1,0 +1,19 @@
+All jars grabbed already built from their open source projects, except the following which have some tweaks; short descriptions below, for precise changes see patch files in patches/
+
+* rsyntaxtextarea.jar
+** https://github.com/bobbylight/RSyntaxTextArea
+** THE text component , pulled Apr 28 2015, (376e75805d3e58a4ad9e4aebc9340b331f9e557c)
+** to build it:
+** ... make public  addMarkedOccurrenceHighlight in RSyntaxTextAreaHighlighter and getMarkOccurrencesOfTokenType in RSyntaxTextArea
+
+* autocomplete.jar 
+** https://github.com/bobbylight/AutoComplete
+*** pulled Apr 28 2015, 8cc2082c25cd179791224cc61dd07979a893ced7
+** make protected getProviderFor(JTextComponent) in LanguageAwareCompletionProvider
+** To build:
+** java -classpath gradle/wrapper/gradle-wrapper.jar  org.gradle.wrapper.GradleWrapperMain build
+
+* rstaui.jar: utility classes for some dialogs etc
+** https://github.com/bobbylight/RSTAUI 
+** pulled Apr 28 2015, 0ffd22a601e0b220565fd4923222528031323de9
+

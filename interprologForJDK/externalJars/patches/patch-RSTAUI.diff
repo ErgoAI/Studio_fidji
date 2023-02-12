@@ -1,0 +1,98 @@
+From 0f5b3dcbe7fec9536a3ead8ddd3604bfc5757969 Mon Sep 17 00:00:00 2001
+From: Miguel Calejo <mc@declarativa.pt>
+Date: Wed, 29 Apr 2015 11:11:53 +0100
+Subject: [PATCH] Let Enter key work as it should on the Find/Replace dialogs'
+ text fields
+
+---
+ src/main/java/org/fife/rsta/ui/search/FindDialog.java    |  7 ++++---
+ src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java | 10 +++++-----
+ 2 files changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/src/main/java/org/fife/rsta/ui/search/FindDialog.java b/src/main/java/org/fife/rsta/ui/search/FindDialog.java
+index 6d39cbc..31c9814 100644
+--- a/src/main/java/org/fife/rsta/ui/search/FindDialog.java
++++ b/src/main/java/org/fife/rsta/ui/search/FindDialog.java
+@@ -291,13 +291,14 @@ public class FindDialog extends AbstractFindReplaceDialog {
+ 			// insistence on eating the first Enter keypress
+ 			// it receives when it has focus and its selected item
+ 			// has changed since the last time it lost focus.
+-			if (e.getKeyCode()==KeyEvent.VK_ENTER && isPreJava6JRE()) {
++			if (e.getKeyCode()==KeyEvent.VK_ENTER /* MC: commented out so that enter on the text field actually does... && isPreJava6JRE() */ ) {
+ 				String searchString = (String)findTextCombo.getSelectedItem();
+-				if (!searchString.equals(lastSearchString)) {
++				// MC: this test was preventing pursuing search with the enter key:
++				//if (!searchString.equals(lastSearchString)) {
+ 					findNextButton.doClick(0);
+ 					lastSearchString = searchString;
+ 					UIUtil.getTextComponent(findTextCombo).selectAll();
+-				}
++				//}
+ 			}
+ 
+ 		}
+diff --git a/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java b/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
+index 64d6a7a..0410c52 100644
+--- a/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
++++ b/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
+@@ -586,26 +586,26 @@ public class ReplaceDialog extends AbstractFindReplaceDialog {
+ 
+ 			// This is an ugly hack to get around JComboBox's insistence on
+ 			// eating the first Enter keypress it receives when it has focus.
+-			if (e.getKeyCode()==KeyEvent.VK_ENTER && isPreJava6JRE()) {
++			if (e.getKeyCode()==KeyEvent.VK_ENTER /* MC: && isPreJava6JRE() */ ) {
+ 				if (e.getSource()==UIUtil.getTextComponent(findTextCombo)) {
+ 					String replaceString = replaceWithCombo.getSelectedString();
+ 					lastReplaceString = replaceString;	// Just in case it changed too.
+ 					String searchString = findTextCombo.getSelectedString();
+-					if (!searchString.equals(lastSearchString)) {
++					//if (!searchString.equals(lastSearchString)) {
+ 						findNextButton.doClick(0);
+ 						lastSearchString = searchString;
+ 						UIUtil.getTextComponent(findTextCombo).selectAll();
+-					}
++					//}
+ 				}
+ 				else { // if (e.getSource()==getTextComponent(replaceWithComboBox)) {
+ 					String searchString = findTextCombo.getSelectedString();
+ 					lastSearchString = searchString;	// Just in case it changed too.
+ 					String replaceString = replaceWithCombo.getSelectedString();
+-					if (!replaceString.equals(lastReplaceString)) {
++					//if (!replaceString.equals(lastReplaceString)) {
+ 						findNextButton.doClick(0);
+ 						lastReplaceString = replaceString;
+ 						UIUtil.getTextComponent(replaceWithCombo).selectAll();
+-					}
++					//}
+ 				}
+ 			}
+ 
+-- 
+2.2.1
+
+From 50962504ebc6f9f3d22bab5dc534634740a594aa Mon Sep 17 00:00:00 2001
+From: Miguel Calejo <mc@declarativa.pt>
+Date: Wed, 29 Apr 2015 12:28:38 +0100
+Subject: [PATCH] Make a field protected to enable wiring copy/paste to
+ ReplaceDialog
+
+---
+ src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java b/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
+index 0410c52..073affb 100644
+--- a/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
++++ b/src/main/java/org/fife/rsta/ui/search/ReplaceDialog.java
+@@ -77,7 +77,7 @@ public class ReplaceDialog extends AbstractFindReplaceDialog {
+ 	private JButton replaceAllButton;
+ 	private JLabel replaceFieldLabel;
+ 
+-	private SearchComboBox replaceWithCombo;
++	protected /* MC: to allow wiring copy/paste */ SearchComboBox replaceWithCombo;
+ 
+ 	// This helps us work around the "bug" where JComboBox eats the first Enter
+ 	// press.
+-- 
+2.2.1
+

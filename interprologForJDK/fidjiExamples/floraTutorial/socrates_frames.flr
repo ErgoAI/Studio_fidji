@@ -1,0 +1,50 @@
+Socrates : man.
+?X:mortal :- ?X:man.
+Socrates[age->56] and Socrates[home->Athens].
+Socrates[student->{Plato,Xenophon}].
+Plato:man and Xenophon:man.
+Plato[age->27]. Xenophon[age->27].
+Xenophon:philosopher.
+Xenophon[talksAbout->Xenophon].
+father(Socrates)[home->Athens].
+father(father(Socrates))[home->Athens].
+avgAge(?AvgAge) :- 
+   ?AvgAge = avg{ ?Y | ?E:man, ?E[age->?Y] }.
+?X:Athenian :- ?X[home->Athens].
+Athenian :: Person .
+?X : God :- ?X: Man , ?X: Immortal.
+
+
+?- ?X:mortal.
+/* ?X = Plato
+?X = Socrates
+?X = Xenophon
+*/
+
+?- ?X[age->?Y].
+/* ?X = Plato
+?Y = 27
+
+?X = Socrates
+?Y = 56
+
+?X = Xenophon
+?Y = 27
+*/
+
+?- ?X[home->?Y].
+/* ?X = Socrates
+?Y = Athens
+
+?X = father(Socrates)
+?Y = Athens
+
+?X = father(father(Socrates))
+?Y = Athens
+*/
+
+?- avgAge(?AvgAge).
+/* ?AvgAge = 36.6667
+*/
+
+?- ?X : Person. 

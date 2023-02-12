@@ -1,0 +1,7 @@
+#Ergo Studio factory preferences, in Java Properties format
+#After setting up your windows, you can generate it with:  ?- ipListenerWindow(LW), java(LW,saveFactoryPreferences).
+#Sat Feb 14 13:42:33 WET 2015
+com.declarativa.fiji.FijiSubprocessEngineWindow.reopenWindows=true
+com.declarativa.fiji.FijiSubprocessEngineWindow=false\tDisplay 69677056\t600\t600\t8\t31
+com.declarativa.fiji.FijiSubprocessEngineWindow.fontSize=13
+com.declarativa.fiji.FijiSubprocessEngineWindow.visibleWindows=

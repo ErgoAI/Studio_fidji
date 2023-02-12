@@ -1,0 +1,1486 @@
+/************
+Part of Fidji, IDE for Prolog/Flora/Ergo by Miguel Calejo
+Copyright Miguel Calejo 2013-2014
+Flora-specific functionality copyright Coherent Knowledge Systems LLC - 2014
+Unless told otherwise by Coherent, this file is licensed with fj_floraSupported == false.
+In particular, xjTableTree, xjLogicQueryPanel, browseGraphRelation 
+still embed Flora components, which will be extracted after the code is further refactored
+************/
+
+:- compiler_options([xpp_on]).
+#define ERGO_STUDIO_MODULE '\\fidji'
+
+%% modularing xj2 causes problems :- import createXJcomponent/2 from xj2.
+:- import variant_get_residual/2, get_residual/2, get_returns_for_call/2, table_state/4, get_calls_for_table/2 from tables.
+:- import get_returns_for_call/2, table_state/4, get_calls_for_table/2, get_residual_sccs/3, get_sdg_info/1 from tables.
+:- import incr_directly_depends/2 from increval.
+:- import
+        read_atom_to_term_print_on_error/3,
+        read_atom_to_term/3,
+        term_to_atom/2,
+        term_to_atom/3,
+        concat_atom/3,
+        concat_atom/2
+   from string.
+:- import closetail/1 from listutil.
+:- import intersect/3 from lists.
+:- import variant/2 from subsumes.
+:- import term_hash/3,slash/1 from machine.
+:- import is_loaded/1,search_module/6 from consult.
+:- import length/2, append/3,member/2,memberchk/2,reverse/2,select/3 from basics.
+:- import get_incr_sccs_with_deps/3 from increval.
+
+:- import flora_decode_goal_as_mainless_atom_substitute_vars/2 from flrdecode.
+:- import flora_shell_loop_message/3 from flrshell_loop_handler.
+
+:- import load_check_syntax/2 from interpreter. % LPS
+:- import lpsp2p_file/2, lpsp2p/3, lps2p_file/2, lps2p/3 from psyntax. % LPS
+
+%% asserted to usermod by the Java side on startup (indicate Coherent-related capabilities)
+:- dynamic fj_floraSupported/0.
+
+%% asserted by the Java side on startup; complement to ipListenerWindow(_)
+:- dynamic fjMainListenerWindow/1.
+
+:- import buildInitiallyFlatTermModel/2, ipObjectSpec/4, ipPrologEngine/1, recoverTermModelArray/2, 
+        java/2, java/3, javaMessage/3, javaMessage/2, recoverTermModel/2, buildTermModel/2, fj_flora_query/2, fj_flora_query/5, ip_may_rethrow_exception/1 
+        from interprolog.
+:- import fjIsErgo/1 from interprolog.
+:- import read_in_prolog_file/3, reset_ops/0, file_path_without_extension/2, fjAddDotExtension/3, fjAddDotPExtension/2,
+	xrefed_file_extension/2, clear_xref_for/1, dump_xref/3, 
+     xref_redefined_predicate/5, my_standard_symbol/2, xref_is_a_rule/4 from myxxref.
+:- import xsb_source_term/4, xsb_defined/6, xsb_export_defined/4, xsb_used/6, xsb_import_defined/5, 
+        xsb_metavar_call/4, xref_file_item/3, xref_syntactic_error/2, xsb_singleton_vars/3, xsb_meta_annotation/4
+        from usermod.
+:- dynamic xsb_defined/6, xsb_export_defined/4, xsb_used/6, xsb_import_defined/5, 
+        xsb_metavar_call/4, xref_file_item/3, xsb_singleton_vars/3.
+%% :- multifile xsb_defined/6, xsb_export_defined/4, xsb_used/6, xsb_import_defined/5.
+:- import conset/2, conget/2 from machine.
+
+:- catch(set_prolog_flag(errors_with_position,on),_,
+         writeln('You are using an old XSB version, so you will not get syntax error precise positions in the editor')).
+
+%% checkXSBPrologFile(UserFilePath,UserFilePrefix (base of previous, with NO backslashes),FilenamePath (file actually read from, may be a temp file),Status)
+%%  call from Java with ...
+%%       simplification: no xpp used for syntax errors. See open_or_xpp_file etc 
+%% Notices: list of notice(Type,Message,Position)
+%% Message is either an atom or singleton(VarName) - occurring in the term starting at Position
+%% Handles Prolog and derived dialects, such as QUALM and LPS
+checkXSBPrologFile(UserFile,UserFilePrefix,Filename,Notices) :- 
+        %% beware of file name changes....this may need revision:
+        %% walltime(T0), 
+        clear_xref_for(UserFile), 
+        (UserFile \== Filename -> clear_xref_for(Filename) ; true),
+        parse_filename(Filename, _ODir, _OBasename, Extension),
+        fj_xref_options(Extension,Options),
+        read_in_prolog_file(Filename,UserFile,Options), % does not update cache, assumed volatile, e.g. file being edited
+        %% walltime(T1),
+        %% ensure xrefs are loaded for all imported modules too (usermod xrefs are loaded from elsewhere, see fjVerifyAndLoadUsermodXref)
+        ( setof(IMFile,(PP+IP+IA+IM)^(xsb_import_defined(UserFilePrefix,PP,IP,IA,IM), fjModule2ModuleFile(IM,IMFile)),ModuleFiles) ->true; ModuleFiles=[]),
+        fjVerifyAndLoadXref(ModuleFiles),   
+        %% writeln(ModuleFiles),
+        %% walltime(T2),
+        reset_ops,
+        %% walltime(T3),
+        retractall(ipCkeckedFileNotice(Filename,_Type,_Message,_Pos)),
+        fjRememberUndefinedPreds(Filename,UserFilePrefix),
+        fjRememberRedefinedPreds(Filename,UserFilePrefix),
+        fjRememberWrongModules(Filename,UserFilePrefix), 
+        fjRememberWrongImports(Filename,UserFilePrefix),
+        fjRememberUnusedImports(Filename,UserFilePrefix),
+        fjRememberWrongExports(Filename,UserFilePrefix),
+        fjRememberUselessPredicates(Filename,UserFilePrefix),
+        fjRememberMetaCalls(Filename,UserFilePrefix),
+        fjRememberBadAbducibles(Filename,UserFilePrefix),
+        fjRememberBadSourceTerms(Filename,UserFilePrefix),
+        findall(notice(Type,Message,Pos), 
+                ( xref_syntactic_error(UserFilePrefix,Pos),Type=error,Message='Syntax error' ; 
+                    xsb_singleton_vars(UserFilePrefix,List,Pos), member(V=_,List), Type=warning, Message=singleton(V) ;
+                    ipCkeckedFileNotice(Filename,Type,Message,Pos)), 
+                Notices).
+
+% fj_xref_options(Extension,Options).
+fj_xref_options(lpsw,[all_singletons,source_mode]) :-!.
+fj_xref_options(lpsp,[all_singletons,source_mode]) :-!.
+fj_xref_options(lps,[all_singletons,source_mode]) :-!.
+fj_xref_options(_,[all_singletons]).
+
+%% ipCkeckedFileNotice(PhysicalFile,Type,Message,Xref_PositionTerm).
+%% Type: error or warning
+%% Message: var_call_in_clause, OtherAtomMessage, singleton(V), bad_module(Module), SomeOtherFunctor(Pred), SomeFunctor(Pred,OtherFileOrModule)
+:- dynamic ipCkeckedFileNotice/4.
+
+/* Xref stuff */
+
+fjRememberUndefinedPreds(FF,FilePrefix) :-
+	xrefed_file_extension(FilePrefix,Extension),
+	xsb_used(UP,UA,FilePrefix,_FP,_FA,Position),
+	\+ fj_standard_symbol(UP,UA),
+	\+ xsb_defined(UP,UA,FilePrefix,_,_,_),
+	\+ xsb_import_defined(FilePrefix,_position,UP,UA,_remoteModule),
+	\+ ((xsb_defined(UP,UA,UF,_,_,_), fjUsermodFile(UF))),
+	% hack for QUALM:
+	((Extension = 'ab', xsb_meta_annotation(FilePrefix,_,abducibles(Abds),_Vars)) -> \+ memberchk(UP/UA,[prolog/1|Abds])  ; true), 
+	assert(ipCkeckedFileNotice(FF,warning,undefined(UP/UA),Position)),
+	fail.
+fjRememberUndefinedPreds(_FF,_FilePrefix).
+
+%% Needed to complement standard_symbol
+fj_standard_symbol(Pred,Arity) :- my_standard_symbol(Pred,Arity).
+
+fjRememberRedefinedPreds(FileRef,UserFilePrefix) :- 
+	xrefed_file_extension(UserFilePrefix,Extension),
+	xref_redefined_predicate(Pred,Arity,UserFilePrefix,Position,OtherFile),
+	(Extension = 'ab' -> \+ member(Pred/Arity,[abds/1,intv/1,expect/1]) ; true), % hack for QUALM
+	assert(ipCkeckedFileNotice(FileRef,warning,redefined(Pred/Arity,OtherFile),Position)),
+	fail.
+fjRememberRedefinedPreds(_FileRef,_UserFilePrefix1).
+
+fjRememberBadAbducibles(FileRef,FilePrefix) :-
+	xrefed_file_extension(FilePrefix,'ab'),
+	xsb_meta_annotation(FilePrefix,Position,abducibles(Abds),_Vars), member(P/Arity,Abds),
+	( once(xsb_defined(P,Arity,FilePrefix,_Position,_Meta, true)) ; \+ xsb_used(P,Arity,FilePrefix,_FromPred,_FromArity,_Position)),
+	assert(ipCkeckedFileNotice(FileRef,warning,bad_abducible(P/Arity),Position)),
+	fail.
+fjRememberBadAbducibles(_Filename,_UserFilePrefix).
+
+fjRememberBadSourceTerms(FileRef,FilePrefix) :-
+	xrefed_file_extension(FilePrefix,'lpsw'), 
+	catch(lps_engine_directory(_),_,fail), % LPS IS present
+	% uncomment if you want syntax error to be singled out: \+ xref_syntactic_error(FilePrefix,_),
+	load_check_syntax(FileRef,Notices),
+	member(notice(Type,Message,Position),Notices),
+	assert(ipCkeckedFileNotice(FileRef,Type,Message,Position)),
+	fail.
+fjRememberBadSourceTerms(FileRef,FilePrefix) :-
+	xrefed_file_extension(FilePrefix,'lpsp'), 
+	catch(lps_engine_directory(_),_,fail), % LPS IS present
+	% ???? uncomment if you want syntax error to be singled out: \+ xref_syntactic_error(FilePrefix,_),
+	lpsp2p_file(FileRef,LPSWfile), % TODO: this should probably remember the effective transformed pairs...
+	file_path_without_extension(LPSWfile,LPSWfileBase),
+	checkXSBPrologFile(LPSWfile,LPSWfileBase,LPSWfile,WNotices),
+	% assume all notices generated from the translated file; 
+	% otherwise we should go over the original terms directly, and have a disjunction here:
+	member(notice(Type,Message,WPosition),WNotices),
+	% one term per position; cater for multiple unknown positions:
+	once(xsb_source_term(Wterm,LPSWfileBase,WPosition,Vars)),
+	% ...his easy inverse transform is more fragile (cf. comments in psyntax and above) than keeping real original positions: 
+	lpsp2p(Pterm,Vars,Wterm),
+	lps_source_position(Pterm,FileRef,PPosition,_vars),
+	assert(ipCkeckedFileNotice(FileRef,Type,Message,PPosition)),
+	fail.
+fjRememberBadSourceTerms(FileRef,FilePrefix) :-
+	xrefed_file_extension(FilePrefix,'lps'), 
+	catch(lps_engine_directory(_),_,fail), % LPS IS present
+	% ???? uncomment if you want syntax error to be singled out: \+ xref_syntactic_error(FilePrefix,_),
+	lps2p_file(FileRef,LPSWfile), 
+	file_path_without_extension(LPSWfile,LPSWfileBase),
+	checkXSBPrologFile(LPSWfile,LPSWfileBase,LPSWfile,WNotices),
+	% assume all notices generated from the translated file, and 1-1 term mapping... 
+	% ...and that additional terms at the end of the generated file don't matter
+	member(notice(Type,Message,t(_,TermPos)),WNotices),
+	once(xsb_source_term(_,FilePrefix,t(CharPos,TermPos),_Vars)),
+	assert(ipCkeckedFileNotice(FileRef,Type,Message,t(CharPos,TermPos))),
+	fail.
+fjRememberBadSourceTerms(_Filename,_UserFilePrefix).
+
+% lps_source_position(Term,FileWithExtension,Position,Vars)  define hook for LPS interpreter
+lps_source_position(Term,FileWithExt,Pos,Vars) :- 
+	xref_file_item(FileWithExt,FilePrefix,_), 
+	xsb_source_term(T,FilePrefix,Pos,Vars), variant(Term,T), 
+	!.
+
+/* Mostly redundant with the previous:
+fjRememberSystemRedefinedPreds(FileRef,UserFilePrefix1) :- 
+        xsb_defined(UP,UA,UserFilePrefix1,Position,_,_),
+        fj_standard_symbol(UP,UA),
+        assert(ipCkeckedFileNotice(FileRef,warning,system_redefined(UP/UA),Position)),
+        fail.
+fjRememberSystemRedefinedPreds(_FileRef,_UserFilePrefix1).
+*/
+
+fjRememberUnusedImports(FileRef,UserFilePrefix) :-
+        xsb_import_defined(UserFilePrefix,Position,RP,RA,M),
+        \+ xsb_used(RP,RA,UserFilePrefix,_,_,_),
+        (M==usermod -> \+ xsb_defined(RP,RA,UserFilePrefix,_,_,_) ; true),
+        %% ( fjModule2ModuleFile(M,MFile), fjFileBase(MFile,MFileBase), xsb_defined(RP,RA,MFileBase,_,_,_) -> true ; fail),
+        assert(ipCkeckedFileNotice(FileRef,warning,unused_import(RP/RA),Position)),
+        fail.
+fjRememberUnusedImports(_FileRef,_UserFilePrefix).
+
+fjRememberWrongImports(FileRef,UserFilePrefix) :-
+        xsb_import_defined(UserFilePrefix,Position,RP,RA,M),
+        fjModule2ModuleFile(M,MFile), fjFileBase(MFile,MFileBase),
+        \+ xsb_defined(RP,RA,MFileBase,_,_,_),
+        assert(ipCkeckedFileNotice(FileRef,warning,bad_import(RP/RA,MFile),Position)),
+        fail.
+fjRememberWrongImports(_FileRef,_UserFilePrefix).
+
+fjRememberWrongModules(FileRef,UserFilePrefix) :-
+        (setof(IM,(PP+IP+IA)^(xsb_import_defined(UserFilePrefix,PP,IP,IA,IM)),Modules)->true;Modules=[]),
+        fjRememberWrongModules(Modules,FileRef,UserFilePrefix).
+
+fjRememberWrongModules([],_FileRef,_UserFilePrefix) :- !. 
+fjRememberWrongModules([Module|Modules],FileRef,UserFilePrefix) :- (Module==usermod ; fjModule2ModuleFile(Module,_)), !,
+        fjRememberWrongModules(Modules,FileRef,UserFilePrefix).
+fjRememberWrongModules([Module|Modules],FileRef,UserFilePrefix) :- xsb_import_defined(UserFilePrefix,Position,_RP,_RA,Module),
+        assert(ipCkeckedFileNotice(FileRef,warning,bad_module(Module),Position)),
+        !,
+        fjRememberWrongModules(Modules,FileRef,UserFilePrefix).
+
+fjRememberWrongExports(FileRef,UserFilePrefix) :-
+        xsb_export_defined(Predicate,Arity,UserFilePrefix,Position),
+        \+ xsb_defined(Predicate,Arity,UserFilePrefix,_,_,_),
+        assert(ipCkeckedFileNotice(FileRef,warning,bad_export(Predicate/Arity),Position)),
+        fail.
+fjRememberWrongExports(_FileRef,_UserFilePrefix).
+
+fjRememberUselessPredicates(FileRef,UserFilePrefix) :-
+        once(xsb_export_defined(_,_,UserFilePrefix,_)), %% warn only for modules
+        xsb_defined(P,A,UserFilePrefix,Position,_,_), 
+        \+ (xsb_used(P,A,UserFilePrefix,FromPred,FromArity,_), FromPred/FromArity \== P/A), 
+        \+ xsb_export_defined(P,A,UserFilePrefix,_),
+        assert(ipCkeckedFileNotice(FileRef,warning,unused(P/A),Position)),
+        fail.
+fjRememberUselessPredicates(_FileRef,_UserFilePrefix).
+
+fjRememberMetaCalls(FileRef,UserFilePrefix) :-
+        xsb_metavar_call(UserFilePrefix,_Predicate,_Arity,Position),
+        assert(ipCkeckedFileNotice(FileRef,warning,var_call_in_clause,Position)),
+        fail.
+fjRememberMetaCalls(_FileRef,_UserFilePrefix).
+
+/*
+fjFileXrefLoaded(FwithP) :- 
+        parse_filename(FwithP, ODir, OBasename, _OExtension), concat_atom([ODir,OBasename],F),
+        %% (catch(xsb_defined(_,_,F,_,_,_),_,fail) ; catch(xsb_export_defined(_,_,F,_),_,fail) ; catch(xsb_used(_,_,F,_,_,_),_,fail) ; catch(xsb_import_defined(F,_,_,_,_),_,fail)), %%
+        (xsb_defined(_,_,F,_,_,_); xsb_export_defined(_,_,F,_) ; xsb_used(_,_,F,_,_,_) ; xsb_import_defined(F,_,_,_,_)), 
+        !.
+The following is an equivalent and much more effficient alternative: */
+fjFileXrefLoaded(FwithP) :- xref_file_item(FwithP,_,_).
+
+
+%% fjUpdateLibraryDirs(Dirs) Helps make the editor engine keep in sync with the main one
+fjUpdateLibraryDirs([D|Dirs]) :- current_predicate(has_lib_dir/1), !,
+        (has_lib_dir(D)->true;add_lib_dir(D)), fjUpdateLibraryDirs(Dirs).
+fjUpdateLibraryDirs([D|Dirs]) :- !, 
+        (library_directory(D)->true;assert(library_directory(D))), fjUpdateLibraryDirs(Dirs).
+fjUpdateLibraryDirs([]).
+
+%% fjVerifyAndLoadXref(PFilePaths)
+fjVerifyAndLoadXref([F|Files]) :- fjFileXrefLoaded(F), !,  fjVerifyAndLoadXref(Files).
+fjVerifyAndLoadXref([F|Files]) :- !, 
+        (may_read_in_prolog_file(F) -> true ; nl, write('Fiji warning: file '), write(F), writeln('Could not be xreferenced')),
+        %% read_in_prolog_file(F,F),
+        fjVerifyAndLoadXref(Files).
+fjVerifyAndLoadXref([]).
+
+%% called from Java
+fjVerifyAndLoadUsermodXref(F) :- fjVerifyAndLoadXref(F),
+        retractall(fjUsermodFile(_)), fjAssertUsermodFiles(F).
+
+:- dynamic fjUsermodFile/1.
+fjAssertUsermodFiles([F|Files]) :- !,
+        fjFileBase(F,FwithoutP),
+        assert(fjUsermodFile(FwithoutP)),
+        fjAssertUsermodFiles(Files).
+fjAssertUsermodFiles([]).
+
+
+%% Last time we checked, this engine had these operator as current
+:- dynamic fjCurrentOperator(_Precedence,_Type,_Operator).
+
+%% fjFindOperatorsDelta(-Inserted)  Each argument is a list of op(P,T,O).
+%% no point in collecting Deleted... as they will be only a side-effect of Inserted ops
+%% called from Java
+fjFindOperatorsDelta(/*Deleted,*/Inserted) :-
+        (\+fjCurrentOperator(_Precedence,_Type,_Operator) %% we only need deltas relative to system startup
+        -> (current_op(P,T,O),assert(fjCurrentOperator(P,T,O)),fail;true) 
+        ; true),
+        findall(op(P,T,O),(current_op(P,T,O), \+ fjCurrentOperator(P,T,O)),Inserted)/*,
+        findall(op(P,T,O),(fjCurrentOperator(P,T,O), \+current_op(P,T,O)),Deleted)*/.
+/* ..and the following would give us call-to-call deltas if we wanted them:
+(member(op(P,T,O),Deleted), retract(fjCurrentOperator(P,T,O)), fail ; true),
+(member(op(P,T,O),Inserted), assert(fjCurrentOperator(P,T,O)), fail ; true).*/
+
+fjMayApplyOpDeltas(InsertedOps) :- member(op(P,T,O),InsertedOps), \+ current_op(P,T,O), op(P,T,O), fail.
+fjMayApplyOpDeltas(_InsertedOps).
+
+%% Consults the cache first; does NOT erase items first, because it assumes this is the first load
+may_read_in_prolog_file(Filename) :- 
+	fjXrefCacheFilename(Filename,CachedName), path_sysop(modtime,Filename,FileTime), 
+	( (path_sysop(modtime,CachedName,CachedTime), CachedTime>=FileTime) -> 
+	( xref_file_item(Filename,_,_modtime) -> true /* no need to reload; TODO:shouldn't we check _modtime??? */; 
+		% load from cache, sanity check
+		(
+			clear_xref_for(Filename), load_dync(CachedName),
+			(xref_file_item(Filename,_,_) -> true ; writeln('Bad Xref cache item!!!'-Filename), fail)
+		)
+		)
+	; 
+	%% read and build cache:
+	clear_xref_for(Filename),
+	read_in_prolog_file(Filename,Filename,[]), % does NOT request all_singletons
+	reset_ops, fjDumpXrefCache(Filename,CachedName)
+	).
+
+
+%% asserted from the Java side (only for the auxiliary engine):
+:- dynamic fjXrefCacheDir/1.
+fjXrefCacheFilename(Filename,CachedName) :- 
+        fjXrefCacheDir(Xref), term_hash(Filename,10000000,H), slash(S), concat_atom([Xref,S,H,'.P'],CachedName).
+
+%% called from Java
+fjUsermodPFiles(L) :- 
+        findall(Obj,(current_module(Module), search_module(Module, _Dir, _Mod, _SExt, _Base, Obj_), path_sysop(expand, Obj_, Obj)), ModuleObjs),
+        findall(Source,(
+                        catch(is_loaded(Object),_,(writeln('Please get a newer XSB, to get better Fiji editor support'),fail)), 
+                        \+ basics:member(Object,ModuleObjs), 
+                        fjObject2Source(Object,Source)), 
+                L).
+
+fjObject2Source(Object,SourceFile) :- parse_filename(Object, ODir, OBasename, OExtension),
+        ( OExtension = 'P' -> SourceF = Object ; concat_atom([ODir, OBasename, '.P'], SourceF)),
+        ( path_sysop(exists, SourceF) -> SourceFile = SourceF ; once(fj_object_source_path(OBasename,SourceFile))).
+
+:- import fj_object_source_path/2 from usermod.
+:- dynamic fj_object_source_path/2. 
+
+fjDumpXrefCache(FileWithExt,CachedName) :- dump_xref(FileWithExt,CachedName,fail).
+
+
+%% fjPredicateTree(File,MenuTree)
+%% MenuTree is list of menu(Predicate,Arity,Pos,SubMenuList)
+fjPredicateTree(File,List) :- 
+        findall(menu(F,A,Pos,_),(xsb_defined(F,A,File,Pos,_,_), \+  xsb_used(F,A,File,_FF,_AA,_)),List), 
+        fjPredicateSubRoots(List,File).
+
+fjPredicateSubRoots([menu(TopF,TopA,_Pos,Sub)|List],File) :-  !,
+        findall(menu(F,A,Pos,[]), (xsb_defined(F,A,File,Pos,_,_), xsb_used(F,A,File,TopF,TopA,_)), Sub),
+        fjPredicateSubRoots(List,File).
+fjPredicateSubRoots([],_).
+
+%% fjImmediateCalls(+AtomTermWithoutDot,? Calls-CalledBy)
+%% Each item in the two lists is Functor(Arity,File,Position)
+%% CalledBy is circumscripted to the currently loaded files
+%% called from Java
+fjImmediateCalls(Filename,Term,Calls,CalledBy) :- 
+	read_atom_to_term(Term,GG,_), nonvar(GG), !, 
+	parse_filename(Filename,_,_,Ext),
+	( xref_is_a_rule(Ext,GG,G,_) -> true ; GG=G), % consider non-Prolog languages
+	functor(G,GP,GA),
+	fjMayLoadImportedXref(Filename,GP,GA,_,_),
+	findall(Call, 
+	      (xsb_used(UP,UA,_File,GP,GA,_), (xsb_defined(UP,UA,File1,Position,_,_)->fjAddDotExtension(File1,Ext,File);File='',Position=t(end_of_file,-1)), Call =..[UP,UA,File,Position]), 
+	      Calls),
+	findall(CallTo, 
+	      (xsb_used(GP,GA,File1,FP,FA,Position), fjAddDotExtension(File1,Ext,File), CallTo=..[FP,FA,File,Position]), 
+	      CalledBy).
+fjImmediateCalls(_,_Term,[],[]).
+
+fjMayLoadImportedXref(Filename,GP,GA,ModuleFile,Position) :-
+        fjFileBase(Filename,FilenameBase), 
+        xsb_import_defined(FilenameBase,_,GP,GA,Module), 
+        fjModule2ModuleFile(Module,ModuleFile),
+        %% writeln('Detected imported module '-Module),
+        may_read_in_prolog_file(ModuleFile),
+        fjFileBase(ModuleFile,ModuleFileBase), 
+        (xsb_defined(GP,GA,ModuleFileBase,Position,_,_) -> true ; Position = t(end_of_file,-1)).
+%% faster and less precise: ( xref_file_item(ModuleFile,_,_) -> true ; load ).
+fjMayLoadImportedXref(_Filename,GP,GA,system,t(end_of_file,-1)):- fj_standard_symbol(GP,GA), !.
+fjMayLoadImportedXref(_Filename,_GP,_GA,'???',t(end_of_file,-1)).
+
+fjModule2ModuleFile(Module,ModuleFile) :-
+        (
+          %% unjared files get special treatment:
+          fj_object_source_path(Module,ModuleFile) 
+        ;
+          (Module=library(Module_)->true;Module=Module_),
+          atom(Module_),
+          search_module(Module_, _Dir, _Mod, ModuleExt, Base, _Obj), concat_atom([Base,'.',ModuleExt],ModuleFile_),
+          path_sysop(expand, ModuleFile_, ModuleFile)
+        ), 
+        !.
+
+fjFindDefinition(Filename,GP,GA,File,Position) :-
+	fjFindDefinition(Filename,GP,GA,File,Position,_).
+	
+fjFindDefinition(Filename,GP,GA,File,Position,TemplateAtom) :-
+        fjFileBase(Filename,FilenameBase),
+        ( xsb_defined(GP,GA,FilenameBase,Position,Meta,_) -> 
+        	File = Filename, Template=..[GP|Meta], term_to_atom(Template,TemplateAtom) 
+        	;
+            (fjMayLoadImportedXref(Filename,GP,GA,File,Position), File\==system, File\=='???') -> 
+            	fjFileBase(File,FileBase), xsb_defined(GP,GA,FileBase,_,Meta,_), Template=..[GP|Meta], term_to_atom(Template,TemplateAtom)
+            	;
+            	fj_standard_symbol(GP,GA) -> 
+            		File=system, Position=t(end_of_file,-1), TemplateAtom='' 
+            ;
+            %% usermod:
+            xsb_defined(GP,GA,FilenameBase2,Position,Meta,_) -> 
+            	fjAddDotPExtension(FilenameBase2,File), Template=..[GP|Meta], term_to_atom(Template,TemplateAtom) ;
+            File='???', Position=t(end_of_file,-1), TemplateAtom=''
+        ).
+
+%% fjFindDefinition(+FilenameWhereTermOccurs,+AtomTerm,-Functor,-Arity,-DefinitionFile,-DefinitionPosition,-TemplateAtom)
+fjFindDefinition(Filename,Term,GP,GA,File,Position,TemplateAtom) :-
+        %% writeln(fjFindDefinition(Filename,Term,GP,GA,File,Position)),
+        read_atom_to_term(Term,G,_), !, nonvar(G), functor(G,GP,GA),
+        fjFindDefinition(Filename,GP,GA,File,Position,TemplateAtom).
+
+
+fjFileBase(File,Base) :- file_path_without_extension(File,Base).
+
+% fjPredicateCompletions(Prefix,Templates)
+fjPredicateCompletions(Prefix,Templates) :- 
+	atom_codes(Prefix,Codes), 
+	setof(Template, 
+		(P,Arity,File,Position,Meta,Pcodes,Tail,Proper,T)^(
+			xsb_defined(P,Arity,File,Position,Meta, Proper), atom_codes(P,Pcodes), 
+			append(Codes,Tail,Pcodes), T=..[P|Meta], term_to_atom(T,Template)
+			), 
+		Templates
+	).
+
+% fjExtractPredicateSignature(+Clause_with_cut_replaced_by_dummy_atom,+Fragment_to_be_cut,-Functor,-Signature_atom)
+fjExtractPredicateSignature(DC,Cut,NewFunctor,Signature) :-
+	read_atom_to_term(DC,Clause,Vars1), closetail(Vars1), 
+	arg(1,Clause,Head), % allow for rule functors other than ':-' ...
+	functor(Head,Functor,_),
+	fjGenerateNewFunctor(Functor,NewFunctor),
+	read_atom_to_term(Cut,_,Vars2), closetail(Vars2), 
+	intersect(Vars1,Vars2,NewHeadVars),
+	fjExtractPredicateSignature2(NewHeadVars,Atoms),
+	concat_atom(Atoms,Signature).
+
+fjExtractPredicateSignature2([],[]) :-!.
+fjExtractPredicateSignature2(Vars,['('|Rest]) :- fjExtractPredicateSignature3(Vars,Args), append(Args,')',Rest).
+
+fjExtractPredicateSignature3([VV|Vars],[A|Args]) :- arg(1,VV,A), fjExtractPredicateSignature4(Vars,Args).
+
+fjExtractPredicateSignature4([],[]) :- !.
+fjExtractPredicateSignature4([VV|Vars],[',',A|Args]) :- arg(1,VV,A), fjExtractPredicateSignature4(Vars,Args).
+
+% fjGenerateNewFunctor(Functor,-NewFunctor) GEnerates a similar functor name without known definitions ANYWHERE
+fjGenerateNewFunctor(Functor,Functor) :-
+	\+ xsb_defined(Functor,_,_,_,_,_), !.
+fjGenerateNewFunctor(Functor,NewFunctor) :- 
+	concat_atom([Functor,'_'],Functor_), fjGenerateNewFunctor(Functor_,NewFunctor).
+	
+%fjCallsRelation(_NodeID1,_NodeID2,_ID,_Type,_Term,_Tip)
+%% fjCallsRelation(system-_GP/_GA,_,_,_,_,_) :- !, fail.
+%% Files are the defining files for each associated predicate; this is the MAIN calls relation, used (also by) fjCallsTreeRelation
+fjCallsRelation(CallingFile-GP/GA,CalledFileBase-UP/UA,(CallingFile-GP/GA)-(CalledFileBase-UP/UA),call,'','a call') :- 
+        xsb_used(UP,UA,CallingFile,GP,GA,_Position),
+        (xsb_defined(UP,UA,CallingFile,_,_,_) -> CallingFile=CalledFileBase /* defined in same file, no other matters*/;
+            (fj_standard_symbol(UP,UA) -> CalledFileBase=system;
+                ( xsb_import_defined(CallingFile,_Pos,UP,UA,Module) -> 
+                    (fjModule2ModuleFile(Module,CalledFile), fjFileBase(CalledFile,CalledFileBase), may_read_in_prolog_file(CalledFile) /* Module \== usermod... */ ; 
+                        (Module==usermod,((xsb_defined(UP,UA,CalledFileBase,_,_,_),fjUsermodFile(CalledFileBase)) -> true ; CalledFileBase='???')) ) 
+                ;
+                    %% usermod imports have no apriori known file.. they depend on runtime execution :-(
+                    xsb_defined(UP,UA,CalledFileBase,_DefPosition,_Meta,_), \+ xsb_export_defined(_,_,CalledFileBase,_) /* not a module */
+                )
+            )).
+
+                                %fjCalledNodeRelation(NodeID1,Type,Term,Tip)
+fjCalledNodeRelation(File-Functor/Arity,Type,Node,Tip) :- 
+        xsb_defined(Functor,Arity,File,_Position,Meta,_), !, Node =..[Functor|Meta], Type=predicate, Tip='a predicate'
+        ; 
+        File=system, fj_standard_symbol(Functor,Arity), Node=Functor/Arity, Type=system, Tip='a system predicate'
+        ; File='???', Node='???'(Functor/Arity), Type=predicate, Tip='An unknown predicate'.
+
+%% example: 
+%% fjCallGraphForPredicate(fjCallGraphForPredicate,3,'/Users/mc/Dropbox/interprologsvn_unfuddle/interprologForJDK/src/com/declarativa/fiji/fidji')
+fjCallGraphForPredicate(Functor,Arity,FilePrefix) :-
+        xjGenericGraph(
+                       [FilePrefix-Functor/Arity],
+                       fjCallsRelation(_,_,_,_,_,_),
+                       fjCalledNodeRelation(_,_,_,_),
+                       [layout=frlayout2, labelsInNodes, cubicCurve, maxItems=10000,myGUI(Graph)],
+                       [predicate=[
+                                   operation(term(ID,_P),(
+                                                          ID = File-Functor2/Arity2, 
+                                                          fjDisplayPredicate(Functor2,Arity2,File)
+                                                         ),menu('See Predicate')),
+                                   operation(term(ID,_P),(
+                                                          ID = File-Functor2/Arity2, 
+                                                          findall(Caller,fjCallsRelation(Caller,ID,_,_,_,_),Callers),
+                                                          buildTermModel(Callers,CallersTM),
+                                                          ipObjectSpec('boolean',ExpandIncoming,[1],_),
+                                                          ipObjectSpec('boolean',ExpandOutgoing,[0],_),
+                                                          javaMessage(Graph,addNodes(CallersTM,ExpandIncoming,ExpandOutgoing))
+                                                         ),menu('Expand to Callers'))
+                                  ],
+                        system=[]
+                       ],
+                       [call=[color=black]],
+                       GraphUI), 
+        writeln(GraphUI).
+
+fjCallGraphForPredicate(Filename,Term) :- 
+        read_atom_to_term(Term,G,_), !, nonvar(G), functor(G,Functor,Arity),
+        fjFileBase(Filename,FilePrefix),
+        fjCallGraphForPredicate(Functor,Arity,FilePrefix).
+
+fjDisplayPredicate(Functor,Arity,FilePrefix) :-
+        xsb_defined(Functor,Arity,FilePrefix,Position,_Meta,_),
+        fjMainListenerWindow(LW),
+        xrefed_file_extension(FilePrefix,Extension),
+        %fjAddDotPExtension(FilePrefix,FileWithP),
+        concat_atom([FilePrefix,'.',Extension],FileWithExt),
+        buildTermModel(Position,PositionTM),
+        javaMessage('com.declarativa.fiji.LogicProgramEditor',showEditor(string(FileWithExt),PositionTM,LW)).
+
+%% ex:  
+%% fjCallsTreeRelation(Child,Parent,'/Users/mc/Dropbox/interprologsvn_unfuddle/interprologForJDK/src/com/declarativa/fiji/fidji'-fjCallGraphForPredicate/3) 
+%% fjCallsTreeRelation(_Child,_Parent,Context)
+fjCallsTreeRelation(Root,null,Root) :- !.
+fjCallsTreeRelation(Child,Parent,_Context) :- 
+        fjCallsRelation(Parent,Child,_ID,_Type,_Term,_Tip), \+ Parent=Child. %% TODO: full loop control, keeping ancestors list
+
+fjCallsTreeNode(ID,Type,n(ID,Term)) :- fjCalledNodeRelation(ID,Type,Term,_Tip).
+
+%% ex: 
+%% fjCallTreeForPredicate(fjCallGraphForPredicate,3,'/Users/mc/Dropbox/interprologsvn_unfuddle/interprologForJDK/src/com/declarativa/fiji/fidji',_)
+fjCallTreeForPredicate(Functor,Arity,FilePrefix,TheGUIW) :-
+	Root = FilePrefix-Functor/Arity,
+	createXJcomponent(
+		gt('XJ$LAZY',[
+			caption='A Call Tree',lazytree([
+				gt(_dummy,[typename=predicate,invisible,root,operation(term(Term,_path),(
+					arg(1,Term,FilePrefix2-Functor2/Arity2), fjDisplayPredicate(Functor2,Arity2,FilePrefix2)
+					),menu('See Predicate'))],[
+						gt(_,[caption='Raw', invisible, opaque],_),
+						gt(_,[class='com.xsb.xj.XJLabel',tip='a predicate definition',renderAllNodes,opaque,borderless,color=black],_)
+						]
+	                       ),
+				gt(_dummy,[typename=system,invisible],[
+					gt(_,[caption='Raw', invisible, opaque],_),
+					gt(_,[class='com.xsb.xj.XJLabel',tip='a builtin (system) predicate',renderAllNodes,opaque,borderless,color=gray],_)
+					]
+				)
+				])
+			],
+			lazy(fjCallsTreeRelation(_Child,_Parent,Root),fjCallsTreeNode(_ID,_Type,_Term),Root)
+		),
+		GUI), 
+	javaMessage('com.xsb.xj.XJDesktop',TheGUIW,testGUI(GUI)),
+	fjMainListenerWindow(LW), %% This predicate will run over the auxiliary engine
+	java(LW,addWindowsMenuTo(TheGUIW,null)).
+
+fjCallTreeForPredicate(Filename,Term,Window) :- 
+	read_atom_to_term(Term,GG,_), !, nonvar(GG),
+	parse_filename(Filename,_,_,Ext),
+	( xref_is_a_rule(Ext,GG,G,_) -> true ; GG=G), % consider non-Prolog languages
+	functor(G,Functor,Arity),
+	fjFindDefinition(Filename,Functor,Arity,DefiningFile,_Position),
+	fjFileBase(DefiningFile,DefiningFileBase),
+	fjCallTreeForPredicate(Functor,Arity,DefiningFileBase,TheTreeW),
+	javaMessage(TheTreeW,setLocationRelativeTo(Window)).
+
+/*
+fj_FLORA_ABORT_NOTRACE(X) :- fjIsErgo, !, X = '_$ergo:abort_notrace'.
+fj_FLORA_ABORT_NOTRACE('_$flora:abort_notrace').
+*/
+fj_ABORT_NOTRACE(Message,flrporting:flora_abort(Message,'_$ergo:abort_notrace')) :- fjIsErgo(yes), !.
+fj_ABORT_NOTRACE(Message,flrporting:flora_abort(Message,'_$flora:abort_notrace')) :- fj_floraSupported, !.
+fj_ABORT_NOTRACE(Message,abort(Message)) /*:- writeln(user_abortinggggg)*/.
+
+%% This belongs in XJ, but the specialization for Flora is too much work for now!
+xjTableTree(TheGUI,TM) :- 
+        get_date(_Year,_Month,_Day,Hour,Minute,Second), concat_atom([Hour,Minute,Second],':',_Time), 
+        %% concat_atom(['Flora Tables at ',_Time],WindowTitle), %% when we refresh this should change
+        WindowTitle = 'Tabled Data',
+        ipFontSize(FONT_SIZE), fjQueryAnswerColours(AnswerColor,_),
+        createXJcomponent(
+                          gt(
+                             'XJ$LAZY',
+                             [
+                              caption=WindowTitle, tip='To refresh use the listener Tools menu',
+                              %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged), 
+                              root,
+                              myGUI(_Tree),
+		width=500,height=400,%hiddenroot,
+		% prologcached,
+		fixedheight, % make sure our model is called incrementally on node expansion
+                              lazytree( 
+                                        [
+                                         gt(_,[typename=dummy,color=black,borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque],_),                                              
+                                         gt(_,[typename=table,color=black,borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque,tip='Table',font(_,_,FONT_SIZE)],_),                                              
+                                         gt(_,[typename=incremental,color=orange,borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque,tip='Incremental table',font(_,_,FONT_SIZE)],_),                                           
+                                         gt(_,[typename=failed_subgoal,color=rgb(0,0,255),borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque,tip='Failed goal',font(_,_,FONT_SIZE),
+                                               operation(term(_R,_), (arg(1,_R,T), writeln(T)), menu('See Prolog term'))/*,
+                                               operation(term(_R,_),(arg(1,_R,Call), xjCallTree(Call-[clauseNodes,ruleSourceNodes])),menu('Call tree'))*/ ],_),                                         
+                                         gt(_,[typename=subgoal,color=AnswerColor,borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque,tip='Goal with answers',font(_,_,FONT_SIZE),
+                                               operation(term(_R,_), (arg(1,_R,T), writeln(T)), menu('See Prolog term')) /*
+                                              operation(term(_R,_),(arg(1,_R,Call), xjCallTree(Call-[clauseNodes,ruleSourceNodes])),menu('Call tree'))*/],_),                                           
+                                         gt(_,[typename=answer,color=AnswerColor,borderless,class='com.xsb.xj.XJLabel',readonly,root, opaque, tip='Answer',font(_,_,FONT_SIZE),
+                                               operation(term(_R,_), (arg(1,_R,T), writeln(T)), menu('See Prolog term'))
+                                              ],_)                                      
+                                        ] 
+                                      )
+                             ],
+                             lazy(tableBrowseRelation(_NodeIDT,_ParentID,_),tableNodeRelation(_NodeIDN,_Type,_Term),_)
+                            ),TheGUI), ipListenerWindow(LW), javaMessage(LW,disableWhenBusy(TheGUI)), 
+        javaMessage(TheGUI,TM,getModel), javaMessage('com.xsb.xj.XJDesktop',TheGUIW,testGUI(TheGUI)),
+        javaMessage(LW,addWindowsMenuTo(TheGUIW)).
+
+%% tableBrowseRelation(Node,Parent,Context)
+
+tableBrowseRelation(dummy('TABLES'),null,_Context).
+tableBrowseRelation(table(Pred),dummy('TABLES'),_Context) :- 
+        predicate_property(Pred,tabled), Pred \== brat_undefined, 
+        not predicate_property(Pred,incremental), not not get_calls_for_table(Pred,_Call). 
+tableBrowseRelation(incremental(Pred),dummy('TABLES'),_Context) :- 
+        predicate_property(Pred,incremental), 
+        not predicate_property(Pred,dynamic), not not get_calls_for_table(Pred,_Call).
+
+tableBrowseRelation(Node,Parent,_Context) :- 
+        (Table=incremental;Table=table), Parent =.. [Table,Pred], 
+        get_calls_for_table(Pred,Call), 
+        ( not get_returns_for_call(Call,_Solution) -> functor(Node,failed_subgoal,1) ; functor(Node,subgoal,1) ),
+        arg(1,Node,Call).
+%% tableBrowseRelation(subgoal(Call),incremental(Pred),_Context) :- get_calls_for_table(Pred,Call).
+tableBrowseRelation(answer(Solution),subgoal(Call),_Context) :- get_returns_for_call(Call,Solution).
+
+tableNodeRelation(Node,Type,FloraTerm) :- Node =..[Type,Term], genericNodeRelation(Term,FloraTerm). 
+
+genericNodeRelation(PrologTerm,Term) :- fj_floraSupported, !,
+        flora_decode_goal_as_mainless_atom_substitute_vars(PrologTerm,FloraAtom), Term =.. [FloraAtom,PrologTerm].
+genericNodeRelation(PrologTerm,Term) :- term_to_atom(PrologTerm,Atom), Term =.. [Atom,PrologTerm].
+
+
+%% showResidual(R) :- showResidual_(R).
+showResidual(R) :- fj_floraSupported, !, flrdecode:flora_decode_goal_as_atom(R,A), writeln(A).
+showResidual(R) :- writeln(R).
+
+/*
+showResidual_([]).
+showResidual_([(tnot G1)|Rn]) :-  !, 
+        flrdecode:flora_decode_goal_as_atom((tnot G1),Ratom), write(Ratom), 
+        write('  Caller rule ID: '), tracingInformation(G1,CallingRule,_MatchingRule), 
+        write(CallingRule), 
+        showResidual_(Rn).
+showResidual_([R1|Rn]) :- 
+        flrdecode:flora_decode_goal_as_atom( R1,Ratom), write(Ratom), 
+        write(' Calling rule:'), tracingInformation(R1,CallingRule,_MatchingRule), !, writeln(CallingRule), 
+        showResidual_(Rn).
+showResidual_([R1|Rn]) :- write('Weird residual:'), writeln(R1), showResidual_(Rn).
+*/
+
+%% call tree based on incremental table dependencies
+%% Options list may contain clauseNodes, ruleSourceNodes 
+fjCallTree(TopCall-Options) :- !, callNodeOps(CallOps,TopCall-Options), createXJcomponent(
+                                                                                       gt(
+                                                                                          'XJ$LAZY',
+                                                                                          [
+                                                                                           caption='Call dependencies tree',
+                                                                                           %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged), 
+                                                                                           root,
+                                                                                           myGUI(_Tree),
+                                                                                           width=500,height=400, %% hiddenroot,
+                                                                                           fixedheight, %% make sure our model is called incrementally on node expansion
+                                                                                           lazytree( 
+                                                                                                     [
+                                                                                                      gt(_,[typename=clause,color=blue,borderless,class='com.xsb.xj.XJLabel',readonly,root
+                                                                                                           ],[
+                                                                                                              gt(_,[opaque],_)
+                                                                                                             ]),                        
+                                                                                                      gt(_,[typename=false,color=red,borderless,class='com.xsb.xj.XJLabel',readonly,root|CallOps
+                                                                                                           ],[
+                                                                                                              gt(_,[opaque],_)
+                                                                                                             ]),                        
+                                                                                                      gt(_,[typename=true,color=green,borderless,class='com.xsb.xj.XJLabel',readonly,root, 
+                                                                                                            operation(term(_R,_),(arg(1,_R,Call), fjCallSolutions(Call) ), menu('Goal call + solutions')),
+                                                                                                            operation(term(_R,_),((
+                                                                                                                                   arg(1,_R,Call), writeln('Solutions for ' - Call), 
+                                                                                                                                   get_returns_for_call(Call,Solution), writeln(Solution), fail; true
+                                                                                                                                  )),
+                                                                                                                      menu('Show answers')) | CallOps
+                                                                                                           ],[
+                                                                                                              gt(_,[opaque],_)
+                                                                                                             ])                 
+                                                                                                     ] 
+                                                                                                   )
+                                                                                          ],
+                                                                                          lazy(callTreeRelation(_NodeIDT,_ParentID,TopCall-Options),callNodeRelation(_NodeIDN,_Type,_Term),TopCall-Options)
+                                                                                         ),TheGUI), javaMessage('com.xsb.xj.XJDesktop',testUndoGUI(TheGUI)).
+fjCallTree(TopCall) :- fjCallTree(TopCall-[]).
+
+%% callTreeRelation(NodeID,ParentID,Context) 
+callTreeRelation(NodeID,null,TopCall-_Options) :- var(NodeID), !, NodeID = call(TopCall).
+callTreeRelation(clause(ID,ShowRule,ParentGoal),call(ParentGoal),_TopCall-Options) :- member(clauseNodes,Options), !,
+        (member(ruleSourceNodes,Options)->ShowRule=true;ShowRule=fail),
+        setof(CallingRuleID,
+              SubGoal ^ MatchingID ^ (
+                                       incr_directly_depends(ParentGoal,SubGoal), 
+                                       not variant(ParentGoal,SubGoal), %% the call graph has loops broken by the tabling execution
+                                       tracingInformation(SubGoal,CallingRuleID,MatchingID), %% nonvar(CallingRuleID)
+                                       (var(CallingRuleID)->CallingRuleID=unknown;true)
+                                     ),L),
+        member(ID,L).
+callTreeRelation(call(SubGoal),call(ParentGoal),_Context) :- 
+        incr_directly_depends(ParentGoal,SubGoal),
+        not variant(ParentGoal,SubGoal). 
+callTreeRelation(call(SubGoal),clause(CallingRuleID,ShowRule,ParentGoal),_TopGoal-Options) :- 
+        (member(ruleSourceNodes,Options) -> ShowRule=true; ShowRule=fail),
+        incr_directly_depends(ParentGoal,SubGoal), tracingInformation(SubGoal,CallingRuleID,_),
+        not variant(ParentGoal,SubGoal). %% the call graph has loops broken by the tabling execution
+
+
+                                %% callNodeRelation(NodeID,Type,Term)
+callNodeRelation(call(PrologCall),Type,Term) :- 
+        genericNodeRelation(PrologCall,Term),
+        (get_returns_for_call(PrologCall,_) -> Type=true ; Type=false).
+
+callNodeRelation(clause(CallingRuleID,ShowRule,_ParentGoal),clause,Term) :- 
+        ( CallingRuleID\==unknown -> (ShowRule -> getSilkRule(CallingRuleID,Term) ; Term = CallingRuleID )
+        ; Term = 'Unknown rule').
+
+
+fjCallSolutions(Call) :-
+        genericNodeRelation(Call,CallTerm),
+        findall(SolutionTerm,(get_returns_for_call(Call,Solution),genericNodeRelation(Solution,SolutionTerm)),SolutionTerms),
+        functor(CallTerm,CallAtom,1),
+        createXJcomponent(gt(foobar,[caption='Call/answers node',class='com.xsb.xj.containers.LabelValueColumn', root],[
+                                                                                                                        gt(CallAtom,[caption='Call ',class='com.xsb.xj.XJLabel',color=blue],[]) ,
+                                                                                                                        gt('.',[
+                                                                                                                                caption='Answers', width=300,height=200,
+                                                                                                                                list(gt(_,[
+                                                                                                                                           borderless,class='com.xsb.xj.XJLabel',caption='Answer',typicalsize=90,root,color=green,
+                                                                                                                                           operation(term(Root,_Path), (arg(1,Root,G),writeln(G)),
+                                                                                                                                                     menu('Show Prolog answer')),
+                                                                                                                                           operation(term(Root,_Path), (arg(1,Root,Call), tracingInformation(Call,_,MatchingRuleID), writeln(MatchingRuleID)), 
+                                                                                                                                                     menu('Show matching rule ID'))
+                                                                                                                                          ],[gt(_,[opaque],_)]))
+                                                                                                                               ],
+                                                                                                                           SolutionTerms)
+                                                                                                                       ]),TheGUI), javaMessage('com.xsb.xj.XJDesktop',testUndoGUI(TheGUI)).
+
+
+callNodeOps([
+             operation(term(R,_P),(arg(1,R,G),writeln(G)),menu('Show Prolog call')),
+             /* operation(term(_R,_),( 
+                                    arg(1,_R,Call), tracingInformation(Call,CallingRuleID,_), writeln(CallingRuleID)),
+                       menu('Show calling rule ID')),
+             operation(term(_R,_),( 
+                                    arg(1,_R,Call), tracingInformation(Call,CallingRuleID,_) , flora_clause(H,B,CallingRuleID), 
+                                    flrdecode:flora_decode_goal_as_atom(H,HH), flrdecode:flora_decode_goal_as_atom(B,BB), %% explicit module neded here...
+                                    write(HH), writeln(':-'), writeln(BB)),
+                       menu('Show calling Ergo / Flora-2 clause')), */
+             operation(term(_R,_),(
+                                   arg(1,_R,Call), fjCallTree(Call-Options)),
+                       menu('Call sub tree')),
+             operation(term(_R,_),( arg(1,_R,Call), printSCC(Call) ), menu('My SCC')),
+             operation(term(_R,_),( 
+                                    (arg(1,_R,Call), write('Table state: '), table_state(Call, _PredType, CallType, AnsSetStatus) , writeln(CallType-AnsSetStatus), fail; true) ),
+                       menu('Table state'))
+            ], _TopGoal-Options).
+
+printSCC(Call) :- get_incr_sccs_with_deps([Call],SCCList,DepList), writeln(SCCList), writeln(DepList).
+
+
+
+
+
+%% xjLogicQueryPanel(+Language,+PauseContinueButton,+StopButton,-TheGUI,-QueryGUI,-ExecutorGUI)
+%% PauseContinueButton and StopButton are ints denoting invisible (button) object references
+xjLogicQueryPanel(Language,PauseContinue,Stop,_TheGUI,QueryGUI,ExecutorGUI) :-
+        atom(Language), 
+        %% (Language=prolog, Title='Prolog Query';Language=flora,Title='Flora Query'),
+        (Language=prolog, Title='Prolog Query'
+        ; Language=flora, Title='Ergo Query'
+        ),
+        !,
+        xjRadioMenu('Restraint',
+                    ['Tiny terms'('Depth 5',5),'Small terms'('Depth 25',25),'Normal terms'('Depth 500',500),
+                     'Large terms'('Depth 5000',5000),'Huge terms'('Depth 100k',100000),
+                     'No limit'('Impose no bounds, query will use previous limits; use the shell to specify limits',-1)],
+                    'Normal terms',RestraintMenu),
+                    javaMessage('javax.swing.JMenu',ExplainMenu,'JMenu'(string('Explain why no answers'))),
+                    javaMessage('javax.swing.JMenu',HistoryMenu,'JMenu'(string('History'))), 
+                    ipFontSize(FONT_SIZE),
+                    _GT =  
+                    gt(window,
+                       [caption=Title,class='com.xsb.xj.containers.XJBorderLayout'],
+                       [gt(buttons,[layout=north,class='com.xsb.xj.containers.XJBoxLayout',root],
+                           [gt('',[horizontalStrut,class='com.xsb.xj.containers.XJBox'],[]), 
+                            gt('Execute',
+                               [class='com.xsb.xj.XJButton',
+                                tip='Execute query below',myGUI(Executer),
+                                operation(term(T,_),
+                                          threaded(call((java(Q,string(TTT),getText), fjProcessQueryAtom(Language,TTT,Container,Q,RestraintMenu)))),
+                                          gui(Executer)) ],
+                               []),
+                            gt(_,[javaComponent=PauseContinue],[]),
+                            gt(_,[javaComponent=Stop],[])
+                           ]),
+                        gt(dummy,
+                           [layout=center,class='com.xsb.xj.containers.XJSplitPane',vertical,myGUI(Container)],
+                           %%[gt('Type query here',
+                           [gt('', %% don't want to erase the above text manually
+                               [root,height=70,font(_,_,FONT_SIZE),large,optional,atom,
+                                tip='Type your query here then hit <Enter>',myGUI(Q),
+                                %% somehow does not work: operation(term(T,_),(threadedInAWT(javaMessage(Executer,doClick))),gui(Q)) 
+                                operation(term(T,_),
+                                          threaded(fjProcessQueryAtom(Language,T,Container,Q,RestraintMenu)),
+                                          gui(Q))
+                               ] ,
+                               []),
+                            gt('Answers will appear here',[constant,justify=center,height=120,font(_,_,FONT_SIZE)],[])
+                           ])
+                       ]),
+                    createXJcomponent(_GT,_TheGUI), 
+                    javaMessage(_TheGUI,MyGUIsModel,getMyGUIs), recoverTermModelArray(MyGUIsModel,[myGUI(ExecutorInt),_,myGUI(QueryInt)]), 
+                    ipObjectSpec('InvisibleObject',QueryGUI,[QueryInt],_), ipObjectSpec('InvisibleObject',ExecutorGUI,[ExecutorInt],_),
+                    java(QueryGUI,activatePopupEditMenu), 
+                    ipListenerWindow(LW), java(LW,CH,getCommandHistory), java(CH,addMenuAndField(HistoryMenu,int(0),QueryInt)),
+                    javaMessage('com.xsb.xj.XJDesktop',W,testUndoGUI(_TheGUI)),
+                    ipPrologEngine(Engine), 
+                    javaMessage(W,MB,getJMenuBar), 
+                    (Language==prolog -> javaMessage(MB,add(RestraintMenu)) ; true), 
+
+                    javaMessage('javax.swing.JMenu',ViewMenu,'JMenu'(string('View'))),
+                    (Language==flora -> 
+                        ViewAsGraph = (
+                                        javaMessage(QueryGUI,QGT,getGT),javaMessage(QGT,string(AtomWithDot),toString),
+                                        browseGraphFloraRelation(AtomWithDot,[],10000,GraphGUI),
+                                        javaMessage(GraphGUI,expandAll)
+                                      ) ; 
+                        ViewAsGraph = (
+                                        javaMessage(QueryGUI,QGT,getGT),javaMessage(QGT,string(AtomWithDot),toString),
+                                        read_atomWithDot_to_term(AtomWithDot,PrologGoal,Vars),
+                                        (Vars=[Var1,Var2|_]-> arg(2,Var1,Node1Var), arg(2,Var2,Node2Var),EdgeVars=[Node1Var,Node2Var]; EdgeVars=[]),
+                                        browseGraphRelation(PrologGoal,EdgeVars,[],10000,GraphGUI),
+                                        javaMessage(GraphGUI,expandAll)
+                                      )
+                    ),
+                    buildTermModel(ViewAsGraph,ViewAsGraphTM), 
+                    javaMessage('com.xsb.xj.PrologAction',ViewAsGraphAction,'PrologAction'(Engine,W, ViewAsGraphTM, string('View results as graph'), string('...'))), 
+                    javaMessage(MB,add(ViewMenu)), javaMessage(ViewMenu,add(ViewAsGraphAction)),
+                    _EG_WhyNotGoal = (
+                                       javaMessage(QueryGUI,QGT,getGT),javaMessage(QGT,string(AtomWithDot),toString), 
+                                       fjExplanationWindow(AtomWithDot,_,'\\false',m)) , 
+                    WhyNotGoal = (
+                                   javaMessage(QueryGUI,QGT,getGT),javaMessage(QGT,string(AtomWithDot),toString),
+                                   fjJustificationTree(AtomWithDot,_,'\\true',m)
+                                 ),
+                    WhyNotGoalFailedOnly = (
+                                             javaMessage(QueryGUI,QGT,getGT),javaMessage(QGT,string(AtomWithDot),toString),
+                                             fjJustificationTree(AtomWithDot,_,'\\false',m)
+                                           ),
+                    buildTermModel(WhyNotGoal,WhyNotGoalTM), buildTermModel(WhyNotGoalFailedOnly,WhyNotGoalTMFailedOnly), 
+                    /*
+                    buildTermModel(_EG_WhyNotGoal,EG_WhyNotGoalTM), 
+                    javaMessage('com.xsb.xj.PrologAction',EG_WhyNotAction,
+                    'PrologAction'(Engine,W, EG_WhyNotGoalTM, string('Explanation Game - Why no more (ignoring successes)?'), string('Explain why no more solutions were found'))
+                    ),
+                    */
+                    javaMessage('com.xsb.xj.PrologAction',WhyNotAction,
+                                'PrologAction'(Engine,W, WhyNotGoalTM, string('Why not? (verbose)'), 
+                                               string('Justify why no answers were found; including justification of subgoals that suceeded'))
+                               ), 
+                    javaMessage('com.xsb.xj.PrologAction',WhyNotActionFailedOnly,
+                                'PrologAction'(Engine,W, WhyNotGoalTMFailedOnly, string('Why not?'), 
+                                               string('Justify why no more answers were found; consider only subgoals that have failed without solutions'))
+                               ), 
+                    javaMessage(ExplainMenu,add(WhyNotActionFailedOnly)),
+                    javaMessage(ExplainMenu,add(WhyNotAction)),
+                    %% javaMessage(ExplainMenu,add(EG_WhyNotAction)),    
+                    java(W,EditMenu,getEditMenu),
+                    java(QueryGUI,addEditMenuItems(EditMenu)),
+                    %% Currently "Why not" is JUNK. Commented out until fixed.
+                    %%(Language==flora -> javaMessage(MB,add(ExplainMenu)) ; true),
+                    javaMessage(MB,add(HistoryMenu)), javaMessage(W,pack).
+
+read_atomWithDot_to_term(Atom,G,Vars) :- 
+        atom(Atom), 
+        endsWithDot(Atom) -> (
+                               atom_codes(Atom,Codes),
+                               reverse(Codes,RCodes), select(46,RCodes,RRCodes), !, reverse(RRCodes,TheAtom),
+                               read_atom_to_term(TheAtom,G,Vars), closetail(Vars) 
+                             )
+        ; concat_atom(['Please terminate the query with a ''.'' (dot)',':\n\n\t\t',Atom],Message), xj_failError(Message).
+
+%% fjProcessQueryAtom(Language,Atom,ContainerGUI, Query field GUI,... )
+%% handles a raw query from a query window; ContainerGUI is the XJComponent with query and answers list children
+
+fjProcessQueryAtom(Language,Atom,ContainerGUI,Q,RestraintMenu) :-
+        atom(Atom), atom_codes(Atom,Codes),
+        endsWithDot(Atom) -> (
+                               (Language=prolog ->
+                                   reverse(Codes,RCodes),
+                                   select(46,RCodes,RRCodes),
+                                   reverse(RRCodes,TheAtomCodes),
+                                   atom_codes(TheAtom,TheAtomCodes)
+                               ; TheAtom=Atom
+                               ),
+                               fjProcessQueryAtom2(Language,TheAtom,ContainerGUI,Q,RestraintMenu) 
+                             )
+        ; concat_atom(['Please terminate the query with a ''.'' (dot)',':\n\n\t\t',Atom],Message), xj_failError(Message).
+
+fjProcessQueryAtom2(prolog,DotlessAtom,ContainerGUI,Q,RestraintMenu) :-
+        %% this one prints syntax errors to stdout (listener)
+        %% Would be nice to print then in red.
+        read_atom_to_term_print_on_error(DotlessAtom,G,Vars),
+        !,
+        closetail(Vars), 
+        fjProcessQueryAtom3(prolog,G,Vars,ContainerGUI,Q,RestraintMenu).
+fjProcessQueryAtom2(flora,AtomWithDot,ContainerGUI,Q,RestraintMenu) :-
+        collect_flora_command_goal_and_vars(AtomWithDot,Goal,Vars), !, 
+        fjProcessQueryAtom3(flora,AtomWithDot-Goal,Vars,ContainerGUI,Q,RestraintMenu).
+fjProcessQueryAtom2(_Language,_Atom,_ContainerGUI,_Q,_RestraintMenu) :- 
+        xj_failError('Syntax error in query\nDetails in the listener window').
+
+fjProcessQueryAtom3(Language,G /* Prolog goal or Flora query_atom-PrologGoal */,Vars,ContainerGUI,Q,RestraintMenu) :- 
+        javaMessage(Q, HeightObject, getHeight), ipObjectSpec('java.lang.Integer',HeightObject,[QHeight],_), 
+        ipObjectSpec(int,QHeightObject,[QHeight],_), javaMessage('com.xsb.xj.XJDesktop',setPreferredHeight(Q,QHeightObject)),
+        ipFontSize(FONT_SIZE),
+        fjAnswerData(Vars,Props,GTlist1,Varlist),
+        /* To add Why buttons: (Language==flora -> 
+        append(Varlist,['Why?'],Varlist2), 
+        append(GTlist1,[gt(_,[caption='',class='com.xsb.xj.XJButton',myGUI(WB), operation(term(T,P),writeln(T),gui(WB))],_)],GTlist) 
+        ;
+        */
+        Varlist=Varlist2, GTlist1=GTlist /*)*/ ,
+        DataTemplate =.. [a,TV,Raw,RawVars|Varlist2],   
+        javaMessage(RestraintMenu,RestraintM,getTerm), 
+        recoverTermModel(RestraintM,Restraint),
+        ipEngineController(Controller),
+        javaMessage(Controller,queryStarted),
+        createXJcomponent(gt('Executing...',[constant,justify=center,height=120 /* cf. Answers will appear here height...*/, font(_,_,FONT_SIZE)],[]),ExecutingGUI),
+        javaMessage(ContainerGUI,setRight(ExecutingGUI)),
+        ( Language == prolog -> 
+            fjPrologRestrain(Restraint),
+            catch( findall(DataTemplate,(call_tv(G,TV), copy_term(G+Vars,Raw+RawVars), fj_bind_free_vars(Vars)),Solutions), E,true),
+            fjPrologUnrestrain
+        ;
+            Language == flora, G=GoalAtom-PrologGoal, 
+            %% Ergo users prefer to restrain through the listener and direct Ergo scripting, so no longer: fjFloraRestrain(Restraint),
+            (catch( setof(DataTemplate, 
+                          (_Status,XWamState,Ex,PrologGoal) ^ ( fj_flora_query(GoalAtom,Vars,_Status,XWamState,Ex), copy_term(PrologGoal+Vars,Raw+RawVars), 
+                                                                  fj_bind_free_vars(Vars), (XWamState==0 -> TV=true;TV=undefined), 
+                                                                  (Ex==normal->true; throw(Ex))  ), 
+                          RawSolutions), E, true) -> true ; RawSolutions = []),
+            %% see above.....  fjFloraUnrestrain,
+            removeDuplicateAnswers(RawSolutions,RawSolutions2),
+            beautifyFloraSolutions(RawSolutions2,Solutions)
+        %% RawSolutions=Solutions %% why was this line  written...??
+        ),
+        %% Now done automatically on the Java side: javaMessage(Controller,queryEnded),
+        fjQueryAnswerColours(NormalColor,UndefinedColor),
+        (
+          nonvar(E) -> 
+          (
+            fj_beautify_exception(Language,E,NewE,FilePath,LineNumber), 
+            term_to_atom(NewE,EAtom), %% javaMessage('com.declarativa.fiji.LogicProgramEditor',showEditor(string(FileWithP),PositionInt,string(Functor),ArityInt,LW))
+            (FilePath==null -> ExOperations=[] 
+            ; 
+                ExOperations=[operation(term(_,_),fj_ShowFileLine(FilePath,LineNumber),menu('See offending line'))]
+            ),
+            createXJcomponent(gt(EAtom,[root,large,readonly,justify=center,color=red|ExOperations],[]),_TheGUI2)
+          ) 
+        ; 
+          (
+            (Solutions == [] -> 
+                DisplayedSolutions=[a(failed,_,[],'No answers found')], fjNoAnswersData(FProps,GTFlist),
+                (Language == flora -> 
+                    WhyNotGoal = (javaMessage(Q,QGT,getGT), javaMessage(QGT,string(AtomWithDot),toString), fjJustificationTree(AtomWithDot,_,'\\false',m)),
+                    FProps = [operation(term(_,_),WhyNotGoal,doubleclick), operation(term(_,_),WhyNotGoal,menu('Why not? (experimental)')), tip='Double-click to explain']
+                ; FProps=[])
+            ; DisplayedSolutions = Solutions),
+
+            copy_term(Props-GTlist, Uprops-UGTlist),
+            (Language == flora -> 
+                Props=[color=NormalColor,WHY,WHY_DC,EXPLAIN,BHT,tip='Double-click to see explanation for this answer',font(_,_,FONT_SIZE)],
+                Uprops=[color=UndefinedColor,EXPLAINU,WHY_DC, WHY, SHOWR, SHOWRGRAPH, tip='UNDEFINED answer. Double-click to see explanation',BT,font(_,_,FONT_SIZE)]
+            ; 
+                Props=[color=NormalColor,BT,tip='An answer',font(_,_,FONT_SIZE)],
+                Uprops=[color=UndefinedColor,EXPLAINU,SHOWR, SHOWRGRAPH, tip='A conditional answer (UNDEFINED)',BT,font(_,_,FONT_SIZE)]
+            ),
+            WHY_DC=operation(term(T,P),
+                             (arg(2,T,Goal),flrdecode:flora_decode_goal_as_atom(Goal,FloraAtom), string:concat_atom([FloraAtom,'.'],AtomWithDot), fjJustificationTree(AtomWithDot,Goal,'\\false',w)),
+                             doubleclick),
+            WHY=operation(term(T,P),
+                          (arg(2,T,Goal),flrdecode:flora_decode_goal_as_atom(Goal,FloraAtom), string:concat_atom([FloraAtom,'.'],AtomWithDot), fjJustificationTree(AtomWithDot,Goal,'\\false',w)),
+                          menu('Why?')), 
+            EXPLAIN = EXPLAIN,  %% just to silence the XSB compiler
+            /*
+            // too buggy - not ready for prime time
+            EXPLAIN=operation(term(T,P),
+                              (arg(2,T,Goal),flrdecode:flora_decode_goal_as_atom(Goal,FloraAtom), string:concat_atom([FloraAtom,'.'],AtomWithDot), fjExplanationWindow(AtomWithDot,Goal,'\\false',w)),
+                              menu('Explanation Game')), 
+            */
+            BT = operation(term(T,P),(arg(2,T,Raw), arg(3,T,RawVars), fj_bind_free_vars(RawVars), browseTerm(Raw)),menu('See term as tree')),
+            BHT = operation(term(T,P),(
+                                       arg(2,T,Raw), arg(3,T,RawVars), fj_bind_free_vars(RawVars), flrdecode:flora_decode_goal_as_atom(Raw,FloraAtom),
+                                       string:concat_atom(['%browseTerm((',FloraAtom ,'))@',ERGO_STUDIO_MODULE,'.'],FQ),
+                                       fj_flora_query(FQ,[])
+                                      ),menu('See answer term as tree')),
+            SHOWR = operation(term(T,_Path),(
+                                             arg(2,T,Solution), (Language=flora-> Goal=PrologGoal ; Goal=G), 
+                                             %% writeln((variant_get_residual(Goal,R), Goal=Solution)),
+                                             tables:variant_get_residual(Goal,R), Goal=Solution, %% this is not enough because of Flora's tracing context: subsumes:variant(Goal,Solution), 
+                                             writeln('Residual: '), nl, (Language=flora-> showResidual(R) ; writeln(R))
+                                            ),menu('Show Residual')),
+            SHOWRGRAPH = operation(term(T,_Path),(
+                                                  arg(2,T,Solution), (Language=flora-> Goal=PrologGoal ; Goal=G), 
+                                                  fjUanswerResidualGraph(Goal,Solution,Language,_) 
+                                                 ),menu('Show Graph of Residual')),
+            EXPLAINU = operation(term(T,_Path),(
+                                                arg(2,T,Solution), (Language=flora-> Goal=PrologGoal ; Goal=G), 
+                                                tables:explain_u_val(Goal,Solution,Reason), write('Reason for undefinedness: '), writeln(Reason)
+                                               ),menu('Explain Undefined')),    
+            length(Solutions,Nsolutions),
+            ( Nsolutions < 50 -> (
+                                   %% Eager list
+                                   ( Solutions == [] ->
+                                       LGT = gt('.',[root,font(_,_,FONT_SIZE),adjustToFirstRow, %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged),
+                                                     list([ %% first arg will be typename (TV), second the Prolog raw solution, third raw vars, ...
+                                                            gt(_,[class='com.xsb.xj.ValueRow',constant,root,typename=failed],[gt(_,[invisible],[]),gt(_,[invisible,opaque],_),gt(_,[invisible,opaque],_)|GTFlist])
+                                                          ])],[])
+                                   ;
+                                       LGT = gt('.',[root,font(_,_,FONT_SIZE),adjustToFirstRow, sortable, %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged),
+                                                     list([ %% first arg will be typename (TV), second the Prolog raw solution, third raw vars, ...
+                                                            gt(_,[class='com.xsb.xj.ValueRow',constant,root,typename=true],[gt(_,[invisible],[]),gt(_,[invisible,opaque],_),gt(_,[invisible,opaque],_)|GTlist]),
+                                                            gt(_,[class='com.xsb.xj.ValueRow',constant,root,typename=undefined],[gt(_,[invisible],[]),gt(_,[invisible,opaque],_),gt(_,[invisible,opaque],_)|UGTlist])
+                                                          ])], [] /* no answers; these will be patched below */)
+                                   ),
+                                   createXJcomponent(LGT,_TheGUI2),
+                                   %% buildInitiallyFlatTermModel(Solutions,SolutionsModel), 
+                                   %% using the above requires a patch to XSB's extern_float_codes, to avoid loosing float precision
+                                   buildTermModel(DisplayedSolutions,SolutionsModel),
+                                   javaMessage(_TheGUI2,addTerms(SolutionsModel))
+                                 )
+            ; 
+                (
+                  %% lazy list, with at least one answer
+                  %% writeln('TOO MANY - lazy !'),
+                  fj_get_new_query_cache_functor(CacheFunctor), fj_cache_answers(Solutions,CacheFunctor), CacheGoal=..[CacheFunctor,CachedAnswer],
+                  LGT = gt('XJ$LAZY',[root,font(_,_,FONT_SIZE),adjustToFirstRow, %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged),
+                                      sortable,
+                                      lazylist([ %% first arg will be typename (TV), second the Prolog raw solution, third raw vars, ...
+                                                 gt(_,[class='com.xsb.xj.ValueRow',constant,root,typename=true],[gt(_,[invisible],[]),gt(_,[invisible,opaque],_),gt(_,[invisible,opaque],_)|GTlist]),
+                                                 gt(_,[class='com.xsb.xj.ValueRow',constant,root, typename=undefined],[gt(_,[invisible],[]),gt(_,[invisible,opaque],_),gt(_,[invisible,opaque],_)|UGTlist])
+                                               ])],lazy(CachedAnswer,CacheGoal,_)),
+                  
+                  createXJcomponent(LGT,_TheGUI2)
+                )
+            )
+          ) %% end of "result was not an exception"
+        ),
+        %% add a setter of _TheGUI2 and Q to history menu: (start of G as atom) ....     
+        %% The Java side will kindly keep our history as Swing components, the Prolog side just wires it
+        javaMessage(Q,QueryGT,getGT), javaMessage(QueryGT,string(QueryText),toString), 
+        ipListenerWindow(LW), java(LW,CH,getCommandHistory), java(CH,addToHistory(string(QueryText))),
+        javaMessage(ContainerGUI,setRight(_TheGUI2)),
+        %% Since we catch exceptions above, we must check whether some need to be thrown to our caller to comply to system mechanics... e.g. Flora/Ergo
+        ip_may_rethrow_exception(E). /*,  javaMessage(ContainerGUI,resetToPreferredSizes) now fixing the query, see above */
+        %% get width of ContainerGUI and set _TheGUI2's ?? how can we glue it?   
+
+        :- dynamic fjQueryAnswerColours/2.
+%% fjQueryAnswerColours(Normal,Undefined). Feeling more colorful? Pick a term from http://www.w3schools.com/tags/ref_colorpicker.asp
+fjQueryAnswerColours(rgb(0,163,0),rgb(102,0,102)/*rgb(64,64,64)*/).
+
+
+
+:- conset(fj_query_counter,0).
+fj_get_new_query_cache_functor(F) :- 
+        conget(fj_query_counter,N), N1 is N+1, conset(fj_query_counter,N1), concat_atom([fj_query_result_cache_,N],F).
+
+%% fj_cache_answers(Terms,Functor).
+fj_cache_answers([T1|Tn],F) :- T =..[F,T1], assertz(T), fj_cache_answers(Tn,F).
+fj_cache_answers([],_).
+
+
+ensuresDotEnd(Atom,NewAtom) :- endsWithDot(Atom), !, NewAtom=Atom.
+ensuresDotEnd(Atom,NewAtom) :- atom_codes(Atom,L), append(L,[46],NewAtom).
+
+endsWithDot(Atom) :- atom_codes(Atom,L), endsWithDot2(L).
+
+endsWithDot2(L) :- append(L1,[X],L), (X=46 -> true ; fj_whiteSpace(X), endsWithDot2(L1)).
+
+fj_whiteSpace(32).
+fj_whiteSpace(10).
+fj_whiteSpace(13).
+fj_whiteSpace(9).
+
+
+%% Incomplete == 1 if the Atom will miss some part of Goal, 0 otherwise
+fj_abridged_atom(Atom,Abridged) :-
+        atom_codes(Atom,L),
+        list_prefix(L,30,AbridgedL,_Incomplete),
+        atom_codes(Abridged,AbridgedL).
+
+list_prefix([],_,[],0) :- !.
+list_prefix(_Code,0,[46,46,46],1) :- !.
+list_prefix([C|Code],N,[C|AbridgedCode],Incomplete) :- NN is N-1, list_prefix(Code,NN,AbridgedCode,Incomplete).
+
+%% select whole line in editor, creating one if necessary
+fj_ShowFileLine(FilePath,LineNumber) :- 
+        ipListenerWindow(LW),
+        buildTermModel(notice(error,''/* some day a message may be passed here...*/,p(LineNumber,1,-1,-1),null),NM),
+        javaMessage('com.declarativa.fiji.LogicProgramEditor',showEditor(string(FilePath),NM,LW)).
+
+/* fjAnswerData(+Vars,+ExtraProps,-GTlist,-Varlist). Handles the special case of ground goals*/
+fjAnswerData([],ExtraProps,GTlist,Varlist) :-!, 
+        fjAnswerData_([vv('Answer','Yes (no variable bindings to show)')],[width=250|ExtraProps],GTlist,Varlist).
+fjAnswerData(Vars,ExtraProps,GTlist,Varlist) :- fjAnswerData_(Vars,ExtraProps,GTlist1,Varlist1),
+        (Varlist1=[] -> fjAnswerData_([vv('Answer','Yes (no variable bindings to show)')],[width=250|ExtraProps],GTlist,Varlist);
+            GTlist=GTlist1,Varlist=Varlist1).
+
+%% fjNoAnswersData(+ExtraProps,-GTlist) 
+fjNoAnswersData(ExtraProps,GTlist) :- fjAnswerData_([vv('Answer',_)],[width=250|ExtraProps],GTlist,_Varlist).
+
+fjAnswerData_([],_,[],[]).
+fjAnswerData_([VV|Vars],Props,GTlist, Varlist) :- 
+        VV=..[_,Name,_Var],  /*VV = vv(Name,Var) fails ;-) */
+        (atom_chars(Name,['_'|_]) ; atom_chars(Name,['?','_'|_])), !, %% let's ignore this one (Prolog and Flora cases resp.)
+        fjAnswerData_(Vars,Props,GTlist, Varlist).
+fjAnswerData_([VV|Vars],Props,[gt(_,[opaque,caption=Name|Props],_)|GTlist], [Var|Varlist]) :- 
+        VV=..[_,Name,Var],  fjAnswerData_(Vars,Props,GTlist, Varlist).
+
+fj_bind_free_vars(Vars) :- xj_bind_free_vars(Vars).
+
+
+%% Returns FilePath==null if no file/line number available
+fj_beautify_exception(flora,'_$ergo:exit_break','User aborted',null,-1) :- !. % hack, same as in FijiSubprocessEngineWindow.loadOrAdd()
+fj_beautify_exception(flora,E,Message,FilePath,LineNumber):-
+        flora_shell_loop_message(E,Message,_),
+        (fj_error_with_file_line(Message,FilePath,LineNumber) -> true
+        ; FilePath = null,LineNumber = -1
+        ).
+fj_beautify_exception(prolog,Exception,Message,FilePath,LineNumber):-
+        Exception = error(_,Context),
+        (error_handler:get_sys_error_description(Exception,PrintMsg1) ->
+            concat_commalist(PrintMsg1,PrintMsg)
+            %%cut_backtrace(PrintMsg1,PrintMsg)
+        ; error_handler:xsb_error_get_message(Context,PrintMsg)
+        ),
+        %% would be nice to print in red... Miguel: no idea why this fails (and wrecks the system) :-(
+        %% standard:messageln(PrintMsg), nl,
+        %%Message = 'Error occurred during query execution.\nDetails in the listener.',
+        Message = PrintMsg,
+        %%Message = Exception,  %% this is UGLY
+        (var(FilePath) -> FilePath = null
+        ; true
+        ),
+        (var(LineNumber) -> LineNumber = -1
+        ; true
+        ).
+
+
+%% -1 imposes no restraint, whatever is in force continues
+fjPrologRestrain(-1) :- !.
+fjPrologRestrain(Restraint) :-
+	set_prolog_flag(max_table_answer_size_action, bounded_rationality), set_prolog_flag(max_table_subgoal_size_action, abstract), %% set_prolog_flag(max_table_answer_list_action, abstract??),
+	set_prolog_flag(max_table_answer_size,Restraint), set_prolog_flag(max_table_subgoal_size,Restraint). %% set_prolog_flag(max_table_answer_list_depth,Restraint),
+
+fjPrologUnrestrain :-
+        set_prolog_flag(max_table_answer_size_action, error), set_prolog_flag(max_table_subgoal_size_action, error), 
+        set_prolog_flag(max_table_answer_size,999999), set_prolog_flag(max_table_subgoal_size,999999). 
+
+
+fjUanswerResidualGraph(PrologGoal,Answer,Language,GraphUI) :-
+        (Language == flora -> 
+            NodeGoal = floraResidualNode(_,_,_,_),
+            flora_decode_goal_as_mainless_atom_substitute_vars(Answer,Atom), 
+            tracingInformation(Answer,_,MatchingRule),
+            (nonvar(MatchingRule) -> true
+            ;
+                flrcallflora:traced_call(Answer,MatchingRule,_F,_M)
+            ),
+            FloraOps=[operation(term(PG,_),
+                                showCallingRule(PG),
+                                menu('See rule that used this as condition')),
+                      operation(term(PG,_),
+                                showMatchingRule(PG),
+                                menu('See rule that concluded this'))],
+            !
+        ; NodeGoal = prologResidualNode(_,_,_,_),
+            term_to_atom(Answer,Atom),
+            FloraOps=[]
+        ),
+        concat_atom(['Residual for undefined ',Atom],WindowTitle),
+        xjGenericGraph(
+                       [Answer],
+                       prologResidualEdge(_,_,_,_,_,_),
+                       NodeGoal, 
+                       [cubicCurve,
+                        caption=WindowTitle,
+                        myGUI(Graph),
+                        labelsInNodes,
+                        operation(term(_,_),
+                                  collapseSCCs(PrologGoal,Answer,Graph),
+                                  menu('Collapse mutually recursive components')
+                                 )
+                       ],
+                       [node=[color=grey|FloraOps]],
+                       [dependency=[color=black]],
+                       GraphUI),
+        /*
+           Bug 271: PrologGoal is ok until this point, but inside expandAll()
+           in Java
+           _$_$_ergo'mod'main'tblflapply(p,_$ctxt(_h39851,_h39980,_h40109))
+           becomes
+          _$_$_ergo\47mod\47main\47tblflapply(p,_$ctxt(_h39851,_h39980,_h40109))
+           and XSB complains that the latter is not tabled or is incremental.
+        */
+        javaMessage(GraphUI,expandAll).
+
+prologResidualEdge(A1,A2,A1-A2,dependency,Term,'....') :-
+        nonvar(A1),
+        fj_get_residual(A1,R),
+        member(X,R),
+        (X= (tnot G) -> Term='naf', A2=G
+        ;
+            Term=null, X=A2
+        ).
+
+prologResidualNode(Answer,node,Answer,'An undefined answer').
+
+fj_get_residual(Answer,R) :- copy_term(Answer,Original), get_residual(Answer,R), variant(Original,Answer).
+
+
+collapseSCCs(Goal,Answer,Graph) :- 
+        get_residual_sccs(Goal,Answer,SCCList), collapseSCCs_(SCCList,1,Graph).
+
+collapseSCCs_(SCCList,Index,_) :- not member(ret(_,_,Index),SCCList), !.
+collapseSCCs_(SCCList,Index,G) :- 
+        findall(A,member(ret(_,A,Index),SCCList),Nodes), length(Nodes,N), 
+        (N>1 -> buildTermModelArray(Nodes,IDs), javaMessage(G,collapseNodes(IDs)) ; true),
+        Index1 is Index+1, collapseSCCs_(SCCList,Index1,G).
+
+:- dynamic '$_sdg_temp_node'/8.
+
+fjSubgoalDependencyGraph :- retractall('$_sdg_temp_node'(_)), conset('$_sdg_node_counter',1), 
+	get_sdg_info(SDG), 
+	( 
+		member(subgoal(Term,SCCKey,VertexKey,CallsTo,Answers,PosEdges,NegEdges),SDG), 
+		% TermModels do not deal properly with very long integers in terms, so we'll use smaller ones
+		conget('$_sdg_node_counter',ID), NewID is ID+1, conset('$_sdg_node_counter',NewID),
+		assert('$_sdg_temp_node'(ID,Term,SCCKey,VertexKey,CallsTo,Answers,PosEdges,NegEdges)),
+		fail 
+		; true),
+	setof(ID,(Term,SCCKey,VertexKey,CallsTo,Answers,PosEdges,NegEdges)^'$_sdg_temp_node'(ID,Term,SCCKey,VertexKey,CallsTo,Answers,PosEdges,NegEdges),Nodes),
+	xjGenericGraph(
+		Nodes, fj_sdg_edge(_,_,_,_,_,_),fj_sdg_node(_,_,_,_,_), 
+		[cubicCurve,caption='Subgoal Dependency Graph',myGUI(_Graph), labelsInNodes],
+		[subgoal=[color=grey]],
+		[edge=[color=black]],
+		GraphUI
+	),
+     javaMessage(GraphUI,expandAll).
+
+fj_sdg_node(ID,subgoal,Term,Tip,SCCKey) :- 
+	'$_sdg_temp_node'(ID,Term,SCCKey,_VertexKey,CallsTo,Answers,_PosEdges,_NegEdges),
+	concat_atom([CallsTo,' calls, ',Answers,' answers'],Tip).
+
+% fj_sdg_edge(ID1,ID2,EdgeID,Type,Term,Tip)
+fj_sdg_edge(ID1,ID2,ID1-ID2,edge,Term,'affects') :- 
+	'$_sdg_temp_node'(ID1,_Term,_SCCKey,_VertexKey,_CallsTo,_Answers,PosEdges,NegEdges),
+	(
+		Term='+', member(VertexKey2,PosEdges), '$_sdg_temp_node'(ID2,_,_,VertexKey2,_,_,_,_)
+		; 
+		Term='-', member(VertexKey2,NegEdges), '$_sdg_temp_node'(ID2,_,_,VertexKey2,_,_,_,_)
+	).
+
+%% fjLoadedOrAddedFileNotice(Type,File,Module,Operation,Notice)   Notice: cf. terms in return list of processStatusList/2
+%% Type is error or warning
+:- dynamic fjLoadedOrAddedFileNotice/6.
+
+%% fjProblemsPanel(-GUI,-LM)  returns also the lazy model, so others can send it invalidateAndRefresh() messages
+fjProblemsPanel(GUI,LM) :-
+        ipFontSize(FONT_SIZE),
+        fjProblemTemplate(ErrorGT,error,'com/declarativa/fiji/error_obj.gif'), 
+        fjProblemTemplate(WarningGT,warning,'com/declarativa/fiji/warning_obj.gif'), 
+        LGT = gt('XJ$LAZY',
+                 [caption='Warnings and Errors from Compilation', width=300, adjustToFirstRow, height=200, font(_,_,FONT_SIZE),
+                  root, %% operation(terms(_GUIref,SelectedList),writeln(newSelection-SelectedList),selectionChanged),
+                  lazylist([ErrorGT,WarningGT]), sortable, emptyColor=rgb(0,163,0)],
+                 lazy( n(Type,File,AbridgedFile,Notice), fjLoadedOrAddedFileNotice(Type,File,AbridgedFile,_Module,_Operation,Notice),_Context) ), 
+        createXJcomponent(LGT,GUI), ipListenerWindow(LW), javaMessage(LW,disableWhenBusy(GUI)),
+        javaMessage(GUI,LM,getModel), javaMessage('com.xsb.xj.XJDesktop',testGUI(GUI)).
+
+                                %% fjProblemTemplate(-GT,+Type,+Icon)
+fjProblemTemplate(gt(_,[class='com.xsb.xj.ValueRow',constant,root,typename=Type],[
+                                                                                  gt(_Type,[invisible],[]),
+                                                                                  gt(_File,[invisible],[]),
+                                                                                  gt(_AbridgedFile,[caption='File',class='com.xsb.xj.XJLabel',justify=left,height=HH,font(_,_,FONT_SIZE),readonly,DCop,Tip],[]),
+                                                                                  gt(_,[constant],[
+                                                                                                   gt(_,[invisible],[]),
+                                                                                                   gt('',[class='com.xsb.xj.XJButton',Tip,caption='Type',
+                                                                                                          color=red,nonpersistent,height=HH,icon=Icon, 
+                                                                                                          DCop, MenuOp, width=20],[]),
+                                                                                                   gt(_,[caption='Message',class='com.xsb.xj.XJLabel',width=200,height=HH,font(_,_,FONT_SIZE),justify=left,readonly, DCop,MenuOp, opaque],_),
+                                                                                                   gt(_P1,[invisible,opaque],_),gt(_P2,[invisible,opaque],_),gt(_P2,[invisible,opaque],_)
+                                                                                                  ] )]), Type, Icon) :- 
+        ipFontSize(FONT_SIZE),
+        HH is FONT_SIZE +4,
+        MenuOp = operation(term(Term,_Path),Show,menu('See source culprit')),
+        Tip = (tip='Double click to see source'),
+        DCop = operation(term(Term,_Path),Show,doubleclick),
+        Show = (
+                 arg(2,Term,File), arg(4,Term,Notice), 
+                 fjMayGetNoticeFile(Notice,File,RealFile), buildTermModel(Notice,NM), 
+                 ipListenerWindow(LW),
+                 javaMessage('com.declarativa.fiji.LogicProgramEditor',showEditor(string(RealFile),string(File),NM,LW))
+               ).
+
+fjMayGetNoticeFile(Notice,File,RealFile) :- 
+        Notice =..[_,_Type,_Message,_P1,_P2,NoticeShortFN], 
+        parse_filename(File,_Dir,Base_,Extension_), concat_atom([Base_,'.',Extension_],ShortFile),
+        (       
+          NoticeShortFN == ShortFile -> RealFile = File ; 
+          flora_get_precise_file(_Module,NoticeShortFN,FilePath) ->  RealFile = FilePath ;
+          RealFile = NoticeShortFN 
+        %% notice (short) file (name) is not the main file, and we have no clue of its full path
+        %% The Java side will to grok it
+        ).
+
+fjMayGetNoticeFile(_Notice,File,File).
+
+browseGraphRelation(AtLeastTwoArgsPred) :-
+        browseGraphRelation(AtLeastTwoArgsPred,_GUI).
+
+browseGraphRelation(AtLeastTwoArgsPred,GUI) :-
+        browseGraphRelation(AtLeastTwoArgsPred,[],GUI).
+
+%% browseGraphRelation(edge(_NodeID1,NodeID2,_ID,Type,_Term,_Tip, 100),[50]).
+%% browseGraphRelation(segment(_NodeID1,NodeID2,_ID,Type,_Term,_Tip),['Avenida']).
+%% browseGraphRelation(segment(_NodeID1,NodeID2,_ID,Type,_Term,_Tip)).
+browseGraphRelation(AtLeastTwoArgsPred,InitialNodes,GUI) :- 
+        browseGraphRelation(AtLeastTwoArgsPred,InitialNodes,5000,GUI).
+
+/* This assumed a policy of starting with one initial node only, hence failing to display disconnected graphs:
+browseGraphRelation(AtLeastTwoArgsPred,[],MaxItems) :-
+        copy_term(AtLeastTwoArgsPred,EdgeGoal),
+        EdgeGoal, !,
+        arg(1,EdgeGoal,ID),
+        browseGraphRelation(AtLeastTwoArgsPred,[ID],MaxItems).
+*/
+browseGraphRelation(AtLeastTwoArgsPred,[],MaxItems,GUI) :-
+        setof(ID, AtLeastTwoArgsPred^(AtLeastTwoArgsPred, (arg(1,AtLeastTwoArgsPred,ID);arg(2,AtLeastTwoArgsPred,ID))), InitialIDs),
+        (InitialIDs = [_|_] -> true ; write('Graph without nodes:'), writeln(AtLeastTwoArgsPred), fail),
+        browseGraphRelation(AtLeastTwoArgsPred,[],InitialIDs,MaxItems,GUI).
+
+%% Prolog-only: NodeVars is either a list of [NodeID1Var,NodeId2Var] or [] - in which case the predicate args will be used instead
+browseGraphRelation(AtLeastTwoArgsPred,NodeVars,InitialNodes_,MaxItems,GUI) :-
+        (xjIsFloraGoalWrapper(AtLeastTwoArgsPred) ->
+            (
+              Language=flora, 
+              BT = operation(term(T,P),
+                             (
+                               flrdecode:flora_decode_goal_as_atom(T,FloraAtom),
+                               string:concat_atom(['%browseTerm((',FloraAtom ,'))@',ERGO_STUDIO_MODULE,'.'],FQ),
+                               fj_flora_query(FQ,[])
+                             ),
+                             menu('See node term as tree')),
+              InitialNodes_=[Node1|InitialNodes]
+            )
+        ; (
+            Language=prolog,
+            (NodeVars=[] -> arg(1,AtLeastTwoArgsPred,NodeID1Var), arg(2,AtLeastTwoArgsPred,NodeID2Var)
+            ; NodeVars=[NodeID1Var,NodeID2Var]
+            ),
+            (InitialNodes_ = [Node1|InitialNodes] -> true
+            ; 
+                setof(ID, AtLeastTwoArgsPred^(AtLeastTwoArgsPred, (ID=NodeID1Var;ID=NodeID2Var)), InitialIDs__),
+                (InitialIDs__ = [Node1|InitialNodes] -> true
+                ; write('Graph without nodes:'), writeln(AtLeastTwoArgsPred), fail)
+            ),
+            BT = operation(term(T,_P),browseTerm(T),menu('Browse Term'))
+          )
+        ),
+        GT = gt('XJ$LAZY',[class='com.xsb.xj.XJGraph', layout=frlayout2, directed, /*labelsInNodes, */cubicCurve, maxItems=MaxItems,
+                           myGUI(Graph), root, 
+                           operation(term(T,_P),javaMessage(Graph,setPickingMode),menu('Selection Mode')),
+                           operation(term(T,_P),javaMessage(Graph,setTransformingMode),menu('Scroll Mode')),
+                           operation(term(T,_P),javaMessage(Graph,expandAllVertices),menu('Expand More')),
+                           operation(term(T,_P),javaMessage(Graph,expandAll),menu('Expand All')),
+                           operation(term(T,_P),(javaMessage(Graph,collapseSelectedNodes)),menu('Collapse Selected Nodes')),
+                           %% operation(term(T,_P),writeln(double-Graph),doubleclick),
+                           operation(term(T,_P),javaMessage(Graph,reapplyLayout),menu('Redraw Graph')),
+                           operation(term(T,_P), 
+                                     (P=[_,Layout], javaMessage(Graph,applyLayout(string(Layout)))), 
+                                     menu(P,'Layouts'('frlayout2','daglayout','isomlayout','springlayout2','CircleLayout'))),
+                           nodeTypes([ 
+                                       term=[  
+                                               BT,              
+                                               operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick),
+                                               operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,removeNode(TM))),menu('Hide Node'))
+                                            ],
+                                       xjCollapsed=[ %% see COLLAPSED_TYPE in Java
+                                                     operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,uncollapse(TM))),menu('Uncollapse')),
+                                                     operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,uncollapse(TM))),doubleclick)] 
+                                     ]),
+                           edgeTypes([
+                                      tuple=[color=blue, %% Prolog
+                                             operation(term(T,P),
+                                                       (T=N1-N2, N1=NodeID1Var, N2=NodeID2Var, AtLeastTwoArgsPred, writeln(AtLeastTwoArgsPred)),
+                                                       menu('Show tuple'))],
+                                      floraTuple=[color=blue,
+                                                  operation(term(T,P),
+                                                            (
+                                                              T=N1-N2, arg(1,AtLeastTwoArgsPred,N1), arg(2,AtLeastTwoArgsPred,N2), arg(3,AtLeastTwoArgsPred,FG), 
+                                                              arg(4,AtLeastTwoArgsPred,Vars), AtLeastTwoArgsPred, 
+                                                              collect_flora_command_goal_and_vars(FG,Goal,Vars), 
+                                                              flrdecode:flora_decode_goal_as_atom(Goal,FloraAtom), string:concat_atom([FloraAtom,'.'],AtomWithDot), 
+                                                              fjJustificationTree(AtomWithDot,Goal,'\\true',w)
+                                                            ),
+                                                            menu('Why?'))]              
+                                     ])],
+                lazy( fjGenericEdge(NodeID1Var,NodeID2Var,_EdgeID,_EdgeType,_EdgeTerm,_EdgeTip,AtLeastTwoArgsPred), fjGenericNode(_ID,_Type,_Term,_Tip), [Node1])
+               ), 
+        createXJcomponent(GT,GUI),  javaMessage('com.xsb.xj.XJDesktop',GUIW,testGUI(GUI)), 
+        ipListenerWindow(LW), javaMessage(LW,addWindowsMenuTo(GUIW)),
+        buildInitiallyFlatTermModel(InitialNodes,_INM), javaMessage(GUI,addNodes(_INM)).
+
+%% fjGenericEdge(..6 graph args..,RealGoal)
+fjGenericEdge(NodeID1,NodeID2,NodeID1-NodeID2,Type,null,Tip,G) :- 
+        xjIsFloraGoalWrapper(G) -> 
+        arg(1,G,NodeID1), arg(2,G,NodeID2), G, arg(3,G,Flora), arg(4,G,Vars), Tip=Flora/Vars, Type=floraTuple
+        ; %% Prolog: NodeID1 and NodeID2 will be bound before to some vars in G
+        G,Tip=G,Type=tuple.
+
+fjGenericNode(ID,term,NodeAtom,null) :- fj_floraSupported, !, flrdecode:flora_decode_goal_as_atom(ID,NodeAtom).
+fjGenericNode(ID,term,NodeAtom,null) :- term_to_atom(ID,NodeAtom).
+
+xjIsFloraGoalWrapper(G) :- functor(G,xjLazyFloraGoalGrounding,4).
+
+
+%% Use these for code that hangs sometimes... You must call fjDontWorry before the timeout
+fjImpatientlyReport(Situation,TimeoutMs,IBR) :-
+        atom(Situation), integer(TimeoutMs), ipListenerWindow(L),
+        ipObjectSpec(boolean,FALSE,[0],_), ipObjectSpec(int,Timeout,[TimeoutMs],_),
+        javaMessage(L,IBR,makeIBR(Timeout,string(Situation), FALSE)).
+
+fjDontWorry(IBR) :- javaMessage(IBR,dontWorry).
+
+commalist2atomlist(A,[]) :-
+	var(A),
+	!.
+commalist2atomlist((A,L), [AA|LL]) :-
+	!,
+        term_to_atom(A,AA,[]),
+	commalist2atomlist(L,LL).
+%% also ignote backtraces
+commalist2atomlist(A,Out) :-
+        (A = context(_,_) -> Out = []
+        %% unfortunately, ignore_ops(false) is not implemented and operators
+        %% are displayed in functional notation
+        ; term_to_atom(A,AA,[ignore_ops(false)]), Out = [AA]
+        ).
+
+concat_commalist(CL,Atm) :-
+        commalist2atomlist(CL,L),
+        concat_atom(L,Atm).
+
+cut_backtrace((H,T), [H|TT]) :-
+        !,
+        cut_backtrace(T,TT).
+cut_backtrace(Msg,Out) :-
+        (Msg = context(_,_) -> Out = []
+        ; Out = [Msg]
+        ).

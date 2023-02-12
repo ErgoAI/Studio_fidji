@@ -1,0 +1,1242 @@
+/* File:      xxref.P
+** Author(s): David S. Warren, tweaked towards IDE usage by Miguel Calejo
+** Contact:   xsb-contact@cs.sunysb.edu
+** 
+** Copyright (C) Copyright: David S. Warren
+** 
+** XSB is free software; you can redistribute it and/or modify it under the
+** terms of the GNU Library General Public License as published by the Free
+** Software Foundation; either version 2 of the License, or (at your option)
+** any later version.
+** 
+** XSB is distributed in the hope that it will be useful, but WITHOUT ANY
+** WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+** FOR A PARTICULAR PURPOSE.  See the GNU Library General Public License for
+** more details.
+** 
+** You should have received a copy of the GNU Library General Public License
+** along with XSB; if not, write to the Free Software Foundation,
+** Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+** 
+** 
+*/
+
+:- export
+	build_xref/0, build_xref/1, dump_xref/0, add_dir_xref/1,
+	dump_xref/1, dump_xref/3, update_dir_xref/2, update_file_xref/1, update_xref/0,
+	load_xref/1,
+	clear_xref_for_dir/1, clear_xref_for/1,clear_xref_for/3,known_xrefed_file/1.
+:- export print_pred/3, print_file/3.
+:- export xld/0, xld/1, xhelp/1, xhelpd/1, xhelpf/1.
+:- export read_in_prolog_file/3, reset_ops/0,
+	file_path_without_extension/2, file_path_without_extension/3, fjAddDotExtension/3, fjAddDotPExtension/2,
+	xrefed_file_extension/2, xref_is_a_rule/4,
+	process_clause/5, set_xref_verbosity/1.
+:- export
+	is_load_operation_call/4, is_lib_dir_definition/4,
+	bindAllVars/1, replace_backslashes/2,
+	my_standard_symbol/2, is_module_file/2, module_of_file/2.
+:- export xref_redefined_predicate/5, all_xsb_ref_files_codes/1.
+
+:- import list_directory/2, is_plain_file/1, is_directory/1  from shell.
+:- import process_control/2 from shell.
+:- import xpp_process_file/3 from parse.
+:- import file_pos/2 ,file_size/2 from file_io.
+:- import '_$op'/3, op_type/2 from file_op.
+:- import concat_atom/2 from string.
+:- import append/3, member/2, length/2 from basics.
+:- import closetail/1 from listutil.
+:- import file_read_canonical/3 from machine.
+:- import expand_term/2 from standard.
+:- import conget/2, coninc/2, conset/2 from gensym.
+:- import numbervars/3 from num_vars.
+:- import variant/2, subsumes_chk/2 from subsumes.
+:- import included_ciao_directive/1 from ciao_directives.
+:- import calculate_singleton/3 from singlton.
+:- import
+	xsb_defined/6, xsb_used/6,
+	xsb_export_defined/4,
+	xsb_import_defined/5, 
+	xsb_metavar_call/4,
+	xsb_lib_dir_defined/6,
+	xsb_load_operation_call/6,
+	xref_file_item/3,
+	xref_syntactic_error/2,
+	xsb_singleton_vars/3,
+	xsb_meta_annotation/4,
+	xsb_source_term/4
+    from usermod.
+
+:- multifile xsb_source_term/4, xsb_defined/6, xsb_export_defined/4, xsb_used/6, xsb_import_defined/5, 
+	xsb_metavar_call/4, xsb_lib_dir_defined/6, xsb_load_operation_call/6, 
+	xref_file_item/3, xsb_meta_annotation/4, xref_syntactic_error/2, xsb_singleton_vars/3.
+
+:- import xjSubtermGoal/2 from usermod. % XJ support
+
+% :- import (dynamic)/1, retractall/1, assert/1 from assert.
+/* :- import (index)/2,
+	told/0, writeln/1,
+	write_canonical/1, tell/1, nl/0,
+	op/3, abort/1, functor/3,
+	write/1, tab/1,
+	atom_codes/2,
+	catch/3, repeat/0,
+   close/1, (;)/2 from standard.*/
+% :- import load_dync/1 from consult.
+:- import cd/1, cwd/1 from shell.
+:- import /*file_open/3, */ file_close/1 from file_io.
+:- import file_read/3 from xsb_read.
+% :- import sort/2, findall/3 from setof.
+:- import standard_symbol/3 from std_xsb.
+
+:- comment(build_xref/0, "@pred{build_xref/0} descends from the current
+directory and reads every XSB source file found (by the .P suffix).
+It creates a set of predicates that record all predicates defined and
+used in every XSB source file encountered.  It then writes this
+information out to a file named xsb_xref.P, which can be later
+dynamically loaded to find where predicates are defined and used.
+Very large (>20 Mb) files are assumed to be in canonical term format.
+").
+
+:- comment(dump_xref/0, "@pred(dump_xref/0} writes out information
+gathered by @pred{build_xref/1} to the file named xsb_xref.P into the
+current directory.").
+
+:- comment(build_xref/1, "@pred{build_xref/1} is similar to
+@pred{build_xref/0}, but it takes an explicit directory name, and it
+does not create a file, but only builds the necessary predicates in
+memory.  @pred{dump_xref/0} or @pred{dump_xref/1} can be used to write
+the information out to a file.").
+
+:- comment(dump_xref/1, "@pred(dump_xref/1} writes out information
+gathered by @pred{build_xref/1} to the file named by its argument.").
+
+/* Explore building a simple program to read all Prolog (.P) files in
+a part of the file system and build a table of where predicates are
+defined and used. */
+
+/* Result relations. They now ignore document_import and document_export. */
+
+% xsb_source_term(Term,FilenameWithoutExtension,Position,Meta (for now, a list of var names (atoms)) )
+% For languages with rules etc to be analysed later, and for which no xsb_... facts are added, except for
+% these, xsb_singleton_vars, xref_syntactic_error and xsb_singleton_vars
+% cf. option 'source_mode'
+:- dynamic xsb_source_term/4.
+
+
+% xsb_defined(Predicate,Arity,FilenameWithoutExtension,Position,Meta (for now, a list of var names (atoms)), ProperDefinition)
+% Meta is a list of "good" var names (atoms)
+% ProperDefinition == false if the only defining statement in the file is a dynamics directive
+% Position is the initial position of the definition term (more precisely: the position after reading the previous term)
+%  It is a term t(CharPosition,TermIndex); t(end_of_file,-1) denotes unknown position
+%   TermIndex is the order of the term in the source file (1 onwards)
+%   Chaposition is either an integer or 'end_of_file' (for preprocessed files where character position is potentially wrong)
+:- dynamic xsb_defined/6.
+
+% xsb_export_defined(Pred,Arity,File,Position)
+:- dynamic xsb_export_defined/4. 
+
+% xsb_used(UsedPred,UsedArity,FromFilename,FromPred,FromArity,PositionOfUse)
+:- dynamic xsb_used/6.
+
+% xsb_import_defined(File,Position,RemotePred,RemoteArity,RemoteModule)
+:- dynamic xsb_import_defined/5.
+
+% xsb_metavar_call(File,FromPred,FromArity,Position)
+:- dynamic xsb_metavar_call/4. 
+
+% xsb_lib_dir_defined(File,FromPred,FromArity,Position,Goal,VarList)  list of vv(Name,Var)
+:- dynamic xsb_lib_dir_defined/6. 
+
+ % xsb_load_operation_call(File,FromPred,FromArity,Position,Goal,VarList) list of vv(Name,Var)
+:- dynamic xsb_load_operation_call/6.
+
+% xref_file_item(File,UserFilePrefix,ModificationTime) Full path. Time when the file was indexed into this xref
+:- dynamic xref_file_item/3.
+
+% xref_syntactic_error(File,PositionTerm)  IndexTerm will be the expected (but erroneous) term's
+:- dynamic xref_syntactic_error/2.
+
+% xsb_singleton_vars(File,List,Position).  
+% List as returned by singlton:calculate_singleton/3
+% May evolve to other properties, but for now this is the only local term facet needed
+:- dynamic xsb_singleton_vars/3.
+
+% xsb_meta_annotation(File,Position,Term,VarList) list of vv(Name,Var)
+:- dynamic xsb_meta_annotation/4. 
+
+% older relation preserved:
+xsb_used(UP,UA,FF,FP,FA) :- xsb_used(UP,UA,FF,FP,FA,_).
+xsb_used(UP,UA,FF,'??','??') :- xsb_import_defined(FF,_,UP,UA,_FromModule).
+
+% to keep previous xref package behavior, should consider also
+%% xsb_export_defined and xsb_import_defined:
+xsb_defined(P,A,F):- xsb_defined(P,A,F,_,_,_). 
+
+:- dynamic xref_verbosity/1.
+% set_xref_verbosity(true) (default) cause progress information to be printed out
+set_xref_verbosity(Flag) :- retractall(xref_verbosity(_)), assert(xref_verbosity(Flag)).
+:- set_xref_verbosity(false).
+
+% for debugging
+may_write(X) :- xref_verbosity(true), !, write(X).
+may_write(_).
+
+may_writeln(X) :- xref_verbosity(true), !, writeln(X).
+may_writeln(_).
+	
+build_xref :-
+	build_xref('.'),
+	dump_xref.
+
+dump_xref :- dump_xref('xsb_xref.P').
+
+xld :- load_dync(xsb_xref).
+
+xld(Dir) :-
+	concat_atom([Dir,'/xsb_xref'],XrefFile),
+	load_dync(XrefFile).
+
+xhelp(Pred/Arity) :-
+	instantiate_pa(Pred/Arity),
+	write(Pred),write('/'),write(Arity),writeln(':'),
+	xhelpd1(Pred/Arity),
+	xhelpu1(Pred/Arity),
+	fail.
+xhelp(_).
+	
+xhelpf(FileName) :-
+	instantiate_file(FileName),
+	nl,write('Predicates defined in: '),write(FileName),writeln(':'),
+	findall(P/A,xsb_defined(P,A,FileName),Preds),
+	sort(Preds,SPreds),
+	member(P/A,SPreds),
+	tab(2),write(P),write('/'),writeln(A),
+	xhelpu1(P/A),
+	fail.
+xhelpf(_FileName).
+
+
+xhelpd(Pred/Arity) :-
+	instantiate_pa(Pred/Arity),
+	write(Pred),write('/'),write(Arity),writeln(':'),
+	xhelpd1(Pred/Arity),
+	fail.
+xhelpd(_).
+
+instantiate_pa(Pred/Arity) :-
+	(var(Pred)
+	 ->	findall(Pre/Ari,(xsb_defined(Pre,Ari,_);xsb_used(Pre,Ari,_,_,_)),Preds),
+		sort(Preds,UPreds),
+		member(Pred/Arity,UPreds),
+		\+ standard_symbol(Pred,Arity,_) % maybe not do this?
+	 ; var(Arity)
+	 ->	findall(Ari,(xsb_defined(Pred,Ari,_);xsb_used(Pred,Ari,_,_,_)),Arities),
+		sort(Arities,SArities),
+		member(Arity,SArities)
+	 ;	true
+	).
+
+instantiate_file(FileName) :-
+	(var(FileName)
+	 ->	findall(FileName,xsb_defined(_,_,FileName),FileNames),
+		sort(FileNames,SFileNames),
+		member(FileName,SFileNames)
+	 ;	true
+	).
+
+xhelpu1(Pred/Arity) :-
+	(xsb_used(Pred,Arity,_,_,_)
+	 ->	tab(4),write('used in: '),
+		conset('_xref_first',0),
+		(
+		 (xsb_used(Pred,Arity,FileName,CPred,CArity),
+		  conget('_xref_first',First),
+		  (First =:= 0
+		   ->	  conset('_xref_first',1)
+		   ;	  tab(13)
+		  ),
+		  write(FileName),
+		  tab(2),write('('),write(CPred),write('/'),write(CArity),writeln(')'),
+		  fail
+		  ;
+		  true
+		 )
+		)
+	 ;	true
+	).
+
+xhelpd1(Pred/Arity) :-
+	(xsb_defined(Pred,Arity,_)
+	 ->	tab(4),write('defined in: '),
+		conset('_xref_first',0),
+		(
+		 (xsb_defined(Pred,Arity,FileName),
+		  conget('_xref_first',First),
+		  (First =:= 0
+		   ->	  conset('_xref_first',1)
+		   ;	  tab(16)
+		  ),
+		  writeln(FileName),
+		  fail
+		  ;	 
+		  true
+		 )
+		)
+	 ;      true
+	).
+
+% To avoid users loading prior to this module being initialized (multifile oblige, I think)
+load_xref(File) :- load_dync(File).
+
+build_xref(Dir) :-
+	clear_xref_for(_File), % TODO: should delete only items in Dir
+	add_dir_xref(Dir).
+
+add_dir_xref(Dir) :-
+	gen_p_files(Dir,FileName),
+	 % file_size(FileName,FSize),
+	 % (FSize > 10000000 -> write('Skipped huge file '), writeln(FileName), fail; true),
+	may_writeln(FileName),
+	clear_xref_for(FileName),
+	read_in_prolog_file(FileName),
+	fail
+	;
+	true, may_writeln('Ended add_xref!').
+
+% clear_xref_for(Fileprefix_or_fullfile)
+% File can not be a directory; it can be unbound (and this will clear everything)
+clear_xref_for(File_) :- 
+	(nonvar(File_) -> 
+		(has_logic_extension(File_,FilePrefixCodes) -> atom_codes(FilePrefix_,FilePrefixCodes), File=File_ 
+		;
+		xrefed_file_extension(File_,Extension) -> FilePrefix_=File_,concat_atom([File_,'.',Extension],File)
+		;
+		writeln('*** Weird argument in clear_xref_for/1:'), writeln(File_), fail
+		%ensure_file_with_extension(File_,'.P',File), % assume Prolog
+		%file_path_without_extension(File,FilePrefix)
+		),
+		replace_backslashes(FilePrefix_,FilePrefix)
+		; File=File_),
+	may_write(' Cleaning tuples for '), may_writeln(FilePrefix),
+	retractall(xsb_source_term(_,FilePrefix,_,_)),
+	retractall(xsb_defined(_,_,FilePrefix,_,_,_)),
+	retractall(xsb_export_defined(_,_,FilePrefix,_)), 
+	retractall(xsb_used(_,_,FilePrefix,_,_,_)), 
+	retractall(xsb_import_defined(FilePrefix,_,_,_,_)),
+	retractall(xsb_metavar_call(FilePrefix,_,_,_)),
+	retractall(xsb_lib_dir_defined(FilePrefix,_,_,_,_,_)),
+	retractall(xsb_load_operation_call(FilePrefix,_,_,_,_,_)),
+	retractall(xref_file_item(File,_,_)),
+	retractall(xref_syntactic_error(FilePrefix,_)),
+	retractall(xsb_singleton_vars(FilePrefix,_,_)),
+	retractall(xsb_meta_annotation(FilePrefix,_,_,_)).
+
+clear_xref_for(FilePrefix,Pred,Arity) :- 
+	may_write('Forgetting '), may_writeln(FilePrefix-Pred/Arity),
+	nonvar(FilePrefix),
+	% does not make sense for xsb_source_term/4, but just in case...:
+	retractall(xsb_source_term(_,FilePrefix,_,_)),
+	retractall(xsb_defined(Pred,Arity,FilePrefix,_,_,_)), 
+	retractall(xsb_export_defined(Pred,Arity,FilePrefix,_)), 
+	retractall(xsb_used(Pred,Arity,FilePrefix,_,_,_)), retractall(xsb_used(_,_,FilePrefix,Pred,Arity,_)), 
+	retractall(xsb_import_defined(FilePrefix,_,Pred,Arity,_)),
+	retractall(xsb_metavar_call(FilePrefix,Pred,Arity,_)),
+	retractall(xsb_lib_dir_defined(FilePrefix,Pred,Arity,_,_,_)),
+	retractall(xsb_load_operation_call(FilePrefix,Pred,Arity,_,_,_)),
+	% not this one, to allow patching a loaded xref: retractall(xref_file_item(File,_,_)),
+	retractall(xref_syntactic_error(FilePrefix,_)), % assuming callers don't care about its content...
+	retractall(xsb_singleton_vars(FilePrefix,_,_)),
+	retractall(xsb_meta_annotation(FilePrefix,Pred,Arity,_)).
+
+
+% known_xrefed_file(?FilePrefix) should be equivalent to xref_file_item(_FileWithP,FilePrefix,_).
+known_xrefed_file(FilePrefix) :- 
+	atom(FilePrefix),
+	(xsb_defined(_,_,FilePrefix,_,_,_) ; xsb_import_defined(FilePrefix,_,_,_,_)),
+	!.
+
+% all xref file prefix names as ascii codes
+all_xsb_ref_files_codes(FileCodes) :-
+	setof(File,(P,A,Pos,Meta,Proper,Module)^(xsb_defined(P,A,File,Pos,Meta,Proper); xsb_import_defined(File,Pos,P,A,Module)),Files), 
+	findall(FileCodes,(member(File,Files),atom_codes(File,FileCodes)),FileCodes).  
+
+% (re)build in memory xref for a single file
+update_file_xref(Filename) :- 
+	(( parse_filename(Filename, _ODir, _OBasename, Extension), Extension='') 
+		-> write('***File without extension: '), writeln(Filename), fail 
+		; true),
+	clear_xref_for(Filename),
+	read_in_prolog_file(Filename).
+	
+% update_dir_xref(Dir,Last_Xreferenced_ModTime)
+% Updates facts in memory. To be used after build_xref or load_dync(xref_file) and some files in Dir changed
+% You should call this with LastModTime >= (LastModTime of the xref file already loaded) - (seconds it took to build)
+% For example, 1442251198 is Sep 14 2015, 18:19 Lisbon Time
+update_dir_xref(Dir,LastModTime) :-
+	delete_xref_for_deleted_files(Dir),
+	gen_newer_p_files(Dir,LastModTime,FileName),
+	% file_size(FileName,FSize),
+	% (FSize > 10000000 -> write('Skipped huge file '), writeln(FileName), fail; true),
+	may_writeln(FileName),
+	clear_xref_for(FileName),
+	read_in_prolog_file(FileName),
+	fail
+	;
+	true, may_writeln('Ended update_dir_xref!').
+
+xref_files_for_dir(DirName,FilePrefixes) :-
+	expand_filename(DirName,Dir_), atom_codes(Dir_,Dir_codes_),
+	(append(_,[47],Dir_codes_) -> Dir_codes_=Dir_codes ; append(Dir_codes_,[47],Dir_codes)), % / at the end
+	append(Dir_codes,_,Dir_codes_prefix),
+	(setof(FilePrefix,(A,B,C,D,E,FileCodes,Dir_codes_prefix)^(
+		(xsb_defined(A,B,FilePrefix,C,D,E);xsb_import_defined(FilePrefix,A,B,C,D)),
+		atom_codes(FilePrefix,FileCodes), FileCodes=Dir_codes_prefix
+		), FilePrefixes) -> true ; FilePrefixes=[]).
+
+clear_xref_for_dir(DirName) :-
+	xref_files_for_dir(DirName,FilePrefixes),
+	(member(FilePrefix,FilePrefixes), clear_xref_for(FilePrefix), fail ; true).
+		
+delete_xref_for_deleted_files(DirName) :-
+	xref_files_for_dir(DirName,FilePrefixes),
+	(
+		member(FilePrefix,FilePrefixes), 
+		ensure_file_with_extension(FilePrefix,'.P',File),
+		\+ path_sysop(exists,File), 
+		clear_xref_for(File), fail 
+	; true).
+
+% updates xref for all known files, including those affected by changed global annotations 
+update_xref :-
+	findall(Status-F*FilePrefix,
+		( xref_file_item(F,FilePrefix,LastTime), ( path_sysop(modtime,F,T) -> T>LastTime, Status=changed ; Status=deleted )), 
+		Changed),
+	findall(F, (member(_-F*FilePrefix,Changed), once(xsb_meta_annotation(FilePrefix,_,global(_),_))), ChangedWithGlobals),
+	((length(ChangedWithGlobals,N),N>1) -> 
+		writeln('*** Too many files (more than one...) with global annotations:'), writeln(ChangedWithGlobals), fail 
+		; true),
+	(setof(AF, (Pos,AVars,Path,Pred,P,Arity,CP,CArity,Position,LastTime,LastTime1,FilePrefix1,FilePrefix,F,A,Nickname,Goal,Varname,Vars,VV) ^(
+		member(F,ChangedWithGlobals), xref_file_item(F,FilePrefix1,LastTime1), 
+		xsb_meta_annotation(FilePrefix1,Pos,global(A),AVars),	
+		((A=xsb_loader_predicate(Pred,Path) ; A=xsb_add_lib_predicate(Pred,Path)) -> 
+			functor(Pred,P,Arity), xsb_used(P,Arity,FilePrefix,CP,CArity,Position) 
+		; A=xsb_known_variable(Nickname,Varname) -> 
+			(xsb_lib_dir_defined(FilePrefix,Pred,Arity,Position,Goal,Vars);xsb_load_operation_call(FilePrefix,Pred,Arity,Position,Goal,Vars)), 
+			% vv(...) terms seem module-prone...:
+			member(VV,Vars), arg(1,VV,Varname)
+		),
+		xref_file_item(AF,FilePrefix,LastTime)
+		), AffectedFiles) -> true ; AffectedFiles=[]),
+	(member(deleted-F*_,Changed), clear_xref_for(F), fail ; true),
+	% Now interject ChangedWithGlobals first and make sure all AffectedFiles are updated too:
+	findall(F, (member(changed-F*_,Changed), \+ member(F,ChangedWithGlobals), \+ member(F,AffectedFiles)), ToUpdate1),
+	append(ChangedWithGlobals,ToUpdate1,List), append(List,AffectedFiles,ToUpdate),
+	(member(F,ToUpdate), update_file_xref(F), fail ; true),
+	may_writeln('Ended update_xref').
+	
+dump_xref(FileName) :- dump_xref(_nospecificFile,FileName,fail).
+
+% dump_xref(FileWithExt,XrefFileName,Indexes)  more generic variant useful for caching xref chunks, by source file
+% if nonvar(FileWithExt), saves only facts for this specific file (base)
+% if Indexes==true, generates index directives; this seems (on Oct 20 2015) to break the loaded predicates
+dump_xref(FileWithExt,XrefFileName,Indexes) :-
+	(nonvar(FileWithExt) -> file_path_without_extension(FileWithExt,File) ; File=_any), 
+	tell(XrefFileName),
+	( \+ \+ xref_file_item(FileWithExt,_,_) -> 
+		write_canonical(:-(multifile(/(xref_file_item,3)))), writeln('.'), write_canonical(:-(dynamic(/(xref_file_item,3)))), writeln('.') 
+		; true),
+	( \+ \+ xsb_defined(_,_,File,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_defined,6)))), write('. '), write_canonical(:-(dynamic(/(xsb_defined,6)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_source_term(_,File,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_source_term,4)))), write('. '), write_canonical(:-(dynamic(/(xsb_source_term,4)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_used(_,_,File,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_used,6)))), write('. '), write_canonical(:-(dynamic(/(xsb_used,6)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_import_defined(File,_,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_import_defined,5)))), write('. '), write_canonical(:-(dynamic(/(xsb_import_defined,5)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_export_defined(_,_,File,_) -> (
+		write_canonical(:-(multifile(/(xsb_export_defined,4)))), write('. '), write_canonical(:-(dynamic(/(xsb_export_defined,4)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_metavar_call(File,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_metavar_call,4)))), write('. '), write_canonical(:-(dynamic(/(xsb_metavar_call,4)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_lib_dir_defined(File,_,_,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_lib_dir_defined,6)))), write('. '), write_canonical(:-(dynamic(/(xsb_lib_dir_defined,6)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_load_operation_call(File,_,_,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_load_operation_call,6)))), write('. '), write_canonical(:-(dynamic(/(xsb_load_operation_call,6)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_meta_annotation(File,_,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_meta_annotation,4)))), write('. '), write_canonical(:-(dynamic(/(xsb_meta_annotation,4)))), writeln('.')
+		) ; true),
+	( \+ \+ xref_syntactic_error(File,_) -> (
+		write_canonical(:-(multifile(/(xref_syntactic_error,2)))), write('. '), write_canonical(:-(dynamic(/(xref_syntactic_error,2)))), writeln('.')
+		) ; true),
+	( \+ \+ xsb_singleton_vars(File,_,_) -> (
+		write_canonical(:-(multifile(/(xsb_singleton_vars,3)))), write('. '), write_canonical(:-(dynamic(/(xsb_singleton_vars,3)))), writeln('.')
+		) ; true),
+	(Indexes==true -> write_canonical(:-(index(xsb_source_term/4,trie))),writeln('.') ; true),
+	(xsb_source_term(Term,File,Position,Meta),
+	 write_canonical(xsb_source_term(Term,File,Position,Meta)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_defined/6,trie))),writeln('.') ; true),
+	(xsb_defined(Predicate,Arity,File,Position,Meta,Proper),
+	 write_canonical(xsb_defined(Predicate,Arity,File,Position,Meta,Proper)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_used/6,trie))),writeln('.') ; true),
+	(xsb_used(UPred,UArity,File,Predicate,Arity,Position),
+	 write_canonical(xsb_used(UPred,UArity,File,Predicate,Arity,Position)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_import_defined/5,trie))),writeln('.') ; true),
+	(xsb_import_defined(File,B,C,D,E),
+	 write_canonical(xsb_import_defined(File,B,C,D,E)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_export_defined/4,trie))),writeln('.') ; true),
+	(xsb_export_defined(A_,B_,File,D_),
+	 write_canonical(xsb_export_defined(A_,B_,File,D_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_metavar_call/4,trie))),writeln('.') ; true),
+	(xsb_metavar_call(File,B_,C_,D_),
+	 write_canonical(xsb_metavar_call(File,B_,C_,D_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_lib_dir_defined/6,trie))),writeln('.') ; true),
+	(xsb_lib_dir_defined(File,B_,C_,D_,E_,F_),
+	 write_canonical(xsb_lib_dir_defined(File,B_,C_,D_,E_,F_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_load_operation_call/6,trie))),writeln('.') ; true),
+	(xsb_load_operation_call(File,B_,C_,D_,E_,F_),
+	 write_canonical(xsb_load_operation_call(File,B_,C_,D_,E_,F_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xsb_meta_annotation/4,trie))),writeln('.') ; true),
+	(xsb_meta_annotation(File,B_,C_,D_),
+	 write_canonical(xsb_meta_annotation(File,B_,C_,D_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(Indexes==true -> write_canonical(:-(index(xref_file_item/3,trie))),writeln('.') ; true),
+	(xref_file_item(FileWithExt,Z_,A_),
+	 write_canonical(xref_file_item(FileWithExt,Z_,A_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(xref_syntactic_error(File,A_),
+	 write_canonical(xref_syntactic_error(File,A_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	(xsb_singleton_vars(File,A_,B_),
+	 write_canonical(xsb_singleton_vars(File,A_,B_)),
+	 writeln('.'),
+	 fail
+	 ;
+	 true
+	),
+	told.
+
+
+print_pred(Pred,Arity,FileName) :-
+	setof(p(FileName,DU),(P1,A1)^ (xsb_defined(Pred,Arity,FileName),DU=d;xsb_used(Pred,Arity,FileName,P1,A1),DU=u),FileNames),
+	write(Pred),write('/'),write(Arity),writeln(':'),
+	member(p(FileName,DU),FileNames),
+	tab(2),
+	(DU == d -> write('D: ') ; write('U: ')),
+	writeln(FileName),
+	fail.
+print_pred(_,_,_).
+
+
+print_file(Pred,Arity,FileName) :-
+	setof(p(Pred,Arity),xsb_defined(Pred,Arity,FileName),Preds),
+	write(FileName),write(':'),
+	member(p(Pred,Arity),Preds),
+	tab(2),write(Pred),write('/'),writeln(Arity),
+	fail.
+print_file(_,_,_).
+
+gen_p_files(Dir,FileName) :-
+	gen_newer_p_files(Dir,0,FileName).
+
+gen_newer_p_files(Dir,LastModTime,FileName) :-
+	gen_newer_p_files(Dir,LastModTime,FileName,true).	
+	
+% if LastModTime==0 it does not check file modification dates
+gen_newer_p_files(Dir,LastModTime,FileName,SkipInvisibles) :-
+	list_directory(Dir,File),
+	File \== '.', File \== '..',
+	(SkipInvisibles==true -> atom_codes(File,FileCodes), \+ FileCodes=[46|_] ; true),
+	concat_atom([Dir,'/',File],CFileName),
+	(shell:is_directory(CFileName)
+	 ->	%writeln(dir(CFileName)),
+		gen_newer_p_files(CFileName,LastModTime,FileName,SkipInvisibles)
+	 ; shell:is_plain_file(CFileName)
+	 ->	%writeln(file(CFileName)),
+		has_logic_extension(CFileName,_),
+		FileName = CFileName,
+		(
+			(LastModTime == 0 /* To add files (even older) not xref'd yet, uncomment this: ; \+ known_xrefed_file(_FilePrefix)*/ ) -> true 
+			; path_sysop(modtime,FileName,FileTime), FileTime > LastModTime
+		)
+	 ;	fail
+	).
+
+:- dynamic ops(_Op,_Prec,_Fix).
+
+read_in_prolog_file(PFileName) :-
+	read_in_prolog_file(PFileName,PFileName,[]). % up to 10 singletons per file
+
+
+% read_in_prolog_file(PhysicalFileName,UserFileName) Caller should call reset_ops afterwards
+read_in_prolog_file(PhysicalFileName,UserFileName,Options) :-
+	walltime(T1),
+	check_read_file_options(Options),
+	% my_xpp_options_for_prolog(New),
+	% set_xpp_options(Old,New),
+	( path_sysop(modtime,PhysicalFileName,FileTime) -> true ; write('***File does not exist:'), writeln(PhysicalFileName), fail),
+	conset('_$lineCnt',0),
+	has_logic_extension(UserFileName,UserFilePrefixCodes),
+	atom_codes(UserFilePrefix,UserFilePrefixCodes), may_write(UserFilePrefix),may_write('...'),
+
+	has_logic_extension(PhysicalFileName,PhysicalFilePrefixCodes),
+	append(PhysicalFilePrefixCodes,".H",HFileNameCodes),
+	atom_codes(HFileName,HFileNameCodes),
+
+	(path_sysop(exists, HFileName) -> HFileName2=HFileName; 
+	% else let's try to later find it near the user (space) file:
+		append(UserFilePrefixCodes,".H",HFileNameCodes2),
+		atom_codes(HFileName2,HFileNameCodes2)
+	),
+	replace_backslashes(UserFilePrefix,UserFilePrefix_),
+	assert(xref_file_item(PhysicalFileName,UserFilePrefix_,FileTime)), % this will be used next:
+	catch((read_p_file(HFileName2,UserFilePrefix_,Options),read_p_file(PhysicalFileName,UserFilePrefix_,Options)),_Ball,true), %ignore
+	% reset_ops,
+	conget('_$lineCnt',NLines),
+	walltime(T2), T is (T2-T1)*1000,
+	% revert_xpp_options(Old),
+	may_write(' took '), may_write(T), may_write('mS for '),
+	may_write(NLines),may_writeln(' terms.'). % actually lines, but...
+
+check_read_file_options(Options) :- 
+	is_list(Options), 
+	All = [all_singletons,source_mode],
+	( (member(X,Options), \+ member(X,All)) -> 
+		write('***Bad option: '), writeln(X), write('Acceptable options are:'), writeln(All), fail
+		; true) .
+
+% The following implementation preserves directory separators as they were... necessary for Windows:
+file_path_without_extension(File,Base) :-parse_filename(File, _ODir, _OBasename, OExtension), 
+	(OExtension='' -> Base=File ; 
+	atom_chars(File,FileChars), atom_chars(OExtension,Echars), append(BaseChars,['.'|Echars],FileChars), atom_chars(Base,BaseChars)).
+	
+% File must be an absolute (or at least non relative) path
+file_path_without_extension(File,Prefix,PrefixCodes) :-
+	atom_codes(File,Filecodes),
+	Tail = [46|_],
+	(append(PrefixCodes,Tail,Filecodes) -> atom_codes(Prefix,PrefixCodes) ; Prefix=File, PrefixCodes=Filecodes).
+	
+% has_logic_extension(+File_atom_or_string,-PrefixCodes)
+has_logic_extension(A,Prefix) :- atom(A), !, atom_codes(A,L), has_logic_extension(L,Prefix).
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".P",L).
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".p",L).
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".pl",L).
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".PL",L). 
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".ab",L). % .QUALM
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".lpsp",L). % LPS "papers syntax"
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".lpsw",L). % LPS "Wei/internal syntax"
+has_logic_extension(L,Prefix) :- is_list(L), append(Prefix,".lps",L). % LPS "New syntax"
+
+% ensure_file_with_extension(+F_atom_or_string,+Extension,-FWithE)
+ensure_file_with_extension(F,Extension,FWithE) :- 
+	atom(F), !, atom_codes(F,Codes), ensure_file_with_extension(Codes,Extension,FWithE).
+ensure_file_with_extension(F,Extension,FWithE) :- is_list(F), 
+	(atom(Extension) -> atom_codes(Extension,Ecodes) ; is_list(Extension), Ecodes=Extension),
+	(append(_,Ecodes,F) -> atom_codes(FWithE,F) ; append(F,Ecodes,FF), atom_codes(FWithE,FF)).
+
+fjAddDotExtension(File,Ext,FileWithExt) :- concat_atom([File,'.',Ext],FileWithExt).
+
+fjAddDotPExtension(F,FP) :- fjAddDotExtension(F,'P',FP).
+
+xrefed_file_extension(FilePrefix,Extension) :- 
+	xref_file_item(F,FilePrefix,_), parse_filename(F,_,_,E), E=Extension.
+	
+% Revert operator definitions
+reset_ops :-
+	ops(Op,OldPrec,Fix),
+	op(OldPrec,Fix,Op),
+	fail.
+reset_ops :-
+	retractall(ops(_,_,_)).
+
+read_p_file(FileName,BFileName,Options) :-
+	( (file_exists(FileName), open(FileName,read,IStr), IStr >= 0)
+	 ->	file_size(FileName,FSize),
+		read_p_file_s(IStr,FSize,BFileName,Options,Result),
+		close(IStr),
+		(Result == xpp	% must send thru xpp and reread
+		 ->	cwd(OldDir),
+			atom_codes(FileName,FileCodes),
+            	(once(llappend(DirCodes,[0'/|FileNCodes],FileCodes)) % not append...
+			 ->	atom_codes(Dir,DirCodes),
+				atom_codes(XFile,FileNCodes),
+				cd(Dir) % must get into right directory for included files
+			 ;	XFile = FileName
+			),
+			xpp_process_file(XFile,XPP_process,NIStr),
+			% file_reopen(BFileName,r,NIStr,RetCode), RetCode =:= 0, % ???
+			read_p_file_s(NIStr,FSize,BFileName,Options,do_xpp),
+			process_control(XPP_process, wait(ExitCode)),
+			(ExitCode==0,!
+			 ;	file_close(NIStr),
+				cd(OldDir),
+				abort(('Error while preprocessing ', FileName,
+				       '. Dynamic loading aborted.'))
+			),
+			file_close(NIStr),
+			cd(OldDir)
+		 ;	true	% done
+		)			
+	 ;	true
+	).
+
+%% maybe try read_canonical if file_size is very large?
+%% Result is a var the first time reading, and bound if already through xpp
+read_p_file_s(IStr,FSize,BFileName,Options,Result) :-
+	conset('_$lineCnt',0),
+	conset('_$errorCnt',0),
+	conset('_$singletonCnt',0),
+	(FSize > 20971520 % no apparent need to use this lower bound: 500000
+	 ->	repeat, file_pos(IStr,Position),
+		file_read_canonical(IStr,Term0,_),
+		(Term0 == read_canonical_error
+		 ->	coninc('_$errorCnt',ErrCount),
+			(ErrCount > 10 % ignore beyond the first 10 errors in large files
+			 ->	writeln(userout,'Too many errors; rest of file ignored')
+			 ;	
+			 coninc('_$lineCnt',Line), 
+			 may_assert_xref_syntactic_error(BFileName,t(Position,Line)), 
+			 fail 
+			)
+		 ;      true
+		)
+	 ;	
+	 	repeat, file_pos(IStr,Position_),
+		%catch(file_read(IStr,Term0,Vars),Ball,(do_read_error(Ball,BFileName),fail))
+		catch(file_read(IStr,Term0,Vars),Ball,handleExceptionAndFail(Ball,BFileName))
+	),
+	closetail(Vars),
+	coninc('_$lineCnt',Line), % actually, term counter
+	Position = t(Position_,Line),
+	% (preprocessor_markup(Term0,Position) -> fail ; true),
+	% fmt_write("term %d_%S\n",a(Line,Term0)),
+	calculate_singleton(Term0,Vars,Occurences),
+	may_assert_xsb_singleton_vars(Occurences,BFileName,Position,Options),
+	xrefed_file_extension(BFileName,Extension),
+	expand_term(Term0,Term),
+	(Term == read_canonical_error
+	 ->	!
+	 ; Term == end_of_file
+	 ->	!
+	 ; var(Result),Term = (:-compiler_options(Opts)), member(xpp_on,Opts)
+	 ->	Result = xpp,
+		!	
+	 ; member(source_mode,Options)
+	 -> assert(xsb_source_term(Term0,BFileName,Position,Vars)),
+	 	fail	% We'll NOT store other xref facts
+	 ; Term = (:-Dir)
+	 ->	process_directive(Dir,Vars,BFileName,Position),
+		functor('_$main',Main,0),
+		process_uses(Dir,Vars,BFileName,Main,0,Position),
+		fail
+	 ; Term = (?-Dir)
+	 ->	functor('_$main',Main,0),
+		process_uses(Dir,Vars,BFileName,Main,0,Position),
+		fail
+	 ;	(xref_is_a_rule(Extension,Term,Head,Body)
+		 ->	true
+		 ;	Head = Term,
+			Body = true
+		),
+		process_clause(Head,Body,Vars,BFileName,Position),
+		add_annotations_and_fail(Extension,Head,Body,Vars,BFileName,Position) % this always fails	
+	).
+
+% To later expand for other languages
+% xref_is_a_rule(FileExtensionForLanguage,Term,Head,Body)
+xref_is_a_rule('P',':-'(Head,Body),Head,Body). % Prolog
+xref_is_a_rule('pl',':-'(Head,Body),Head,Body). % SWI and others
+xref_is_a_rule('ab','<-'(Head,Body),Head,Body). % QUALM
+
+
+contextMessage_to_position(_Message-Pos,Pos) :-!.
+contextMessage_to_position(_,end_of_file).
+
+handleExceptionAndFail(Ball,FileRef) :- \+ xref_syntactic_error(FileRef,_), 
+	nl, tab(4), writeln(Ball),
+	writeln('   Any further errors in this file not printed. '),
+	fail.
+handleExceptionAndFail(_Ball,_FileRef) :- % do not record errors beyond the 10th
+	coninc('_$errorCnt',ErrCount),
+	ErrCount>10,
+	!, fail.
+handleExceptionAndFail(error(syntax_error(_what),context(MP,_Bt)),FileRef) :- !, % XSB changes leave _what unbound?
+	conget('_$lineCnt',Line),
+	ItsLine is Line+1,
+	contextMessage_to_position(MP,Pos),
+	may_assert_xref_syntactic_error(FileRef,t(Pos,ItsLine)),
+	fail.
+handleExceptionAndFail(error(syntax_error,context(MP,_Bt)),FileRef) :- !,
+	conget('_$lineCnt',Line),
+	ItsLine is Line+1,
+	contextMessage_to_position(MP,Pos),
+	may_assert_xref_syntactic_error(FileRef,t(Pos,ItsLine)),
+	fail.
+handleExceptionAndFail(E,_) :- 
+	write('Parsing or tokeninzing error:'), writeln(E), 
+	fail.
+	% throw(E).
+
+process_clause(Head,Body,Vars,BFileName,Position) :-
+	functor(Head,Pred,Arity),
+	may_assert_xsb_defined(Pred,Arity,BFileName,Position,Head-Vars,true),
+	(Body == true
+	 ->	true
+	 ;	process_uses(Body,Vars,BFileName,Pred,Arity,Position)
+	),
+	( xjSubtermGoal(Head,G), process_uses(G,Vars,BFileName,Pred,Arity,Position), fail ; true).
+
+add_annotations_and_fail('ab',abds(Abds),true,Vars,BFileName,Position) :- 
+	may_assert_xsb_meta_annotation(abducibles(Abds),BFileName,Position,Vars),
+	fail.
+
+	
+process_directive(Var,_,_,_Position) :- var(Var), !.
+process_directive((D1,D2),Vars,BFileName,Position) :- !,
+	process_directive(D1,Vars,BFileName,Position), process_directive(D2,Vars,BFileName,Position).
+process_directive(op(Prec,Fix,Op),_,_,_Position) :- !,
+	('_$op'(OldPrec,OldFix,Op),op_type(Fix,T),op_type(OldFix,T)
+	 ->	true
+	 ;	OldPrec = 0, OldFix = Fix
+	),
+	catch( % do not crash groking operator declarations written for other Prologs
+		((nonvar(Op), nonvar(OldPrec), nonvar(OldFix))
+		 ->	op(Prec,Fix,Op), assert(ops(Op,OldPrec,OldFix))
+		 ;	true
+		),
+		Ex, (write('Bad op directive:'), writeln(Ex))).
+process_directive(compiler_options(OptList),Vars,_,Position) :-
+	member(ciao_directives,OptList),
+	!,
+	%% These are ciao-directives and hard-coded.  Should get from compiler
+	process_directive(op(500,yfx,(#)),Vars,_,Position),
+	process_directive(op(975,xfx,(=>)),Vars,_,Position),
+	process_directive(op(978,xfx,(::)),Vars,_,Position).
+process_directive(dynamic(ExpList),Vars,BFileName,Position) :- !,
+	process_specs_defined(ExpList,Vars,BFileName,Position,'dynamic').
+process_directive(export(ExpList),Vars,BFileName,Position) :- !,  
+	process_specs_defined(ExpList,Vars,BFileName,Position,'export').
+process_directive(module(_Module,ExpList),Vars,BFileName,Position) :- !,  
+	% TODO: do not lose module name... should probably add arg to xsb_export_defined
+	process_specs_defined(ExpList,Vars,BFileName,Position,'export').
+process_directive(document_export(_ExpList),_,_BFileName,_Position) :- ! .
+	% process_specs_defined(ExpList,BFileName). 
+	% later version might keep this on document_export-specific relation
+process_directive(use_module(FromModule,ExpList),Vars,BFileName,Position) :- !,
+	process_specs_used(ExpList,Vars,BFileName,FromModule,Position).
+process_directive(import(From),Vars,BFileName,Position) :- !,
+	From = from(ExpList,FromModule),
+	process_specs_used(ExpList,Vars,BFileName,FromModule,Position).
+	% process_specs_defined(ExpList,FromModule). 
+process_directive(document_import(From),Vars,BFileName,Position) :- !,
+	% process_specs_used(ExpList,BFileName).
+	% later version might keep this on document_import-specific relation
+	% for now let's catch a typical use case, where it replaces ..import from usermod:
+	( From = from(ExpList,_FromModule) -> 
+		process_specs_used(ExpList,Vars,BFileName,usermod,Position) 
+		; true).
+process_directive(comment(_,_),_,_BFileName,_Position) :- !. % ciao doc comment
+process_directive(annotation(Annotation),Vars,BFileName,Position) :- nonvar(Annotation), !,
+	may_assert_xsb_meta_annotation(Annotation,BFileName,Position,Vars).
+process_directive(D,_,_BFileName,_Position) :- included_ciao_directive(D), !, fail. % Other irrelevant ciao directives
+%process_directive(Annotation,Vars,BFileName,Position) :- user_annotation(Annotation), !,
+%	may_assert_xsb_meta_annotation(Annotation,BFileName,Position,Vars).
+process_directive(_,_,_,_).
+
+% User annotations are recorded almost "as is", they should be validated later
+
+:- dynamic user_annotation/1.
+user_annotation(xsb_meta_calls_in(PredSpec,_Dependencies)) :- ground(PredSpec). % 2nd arg form TBD
+user_annotation(xsb_loader_predicate(G,_)) :- nonvar(G).
+user_annotation(known_varname(GlobalParameter,VarName)) :- atom(GlobalParameter), atom(VarName).
+
+my_standard_symbol(compiler_options,1).
+my_standard_symbol(xsb_configuration,2).
+my_standard_symbol(comment,2).
+my_standard_symbol(annotation,1).
+my_standard_symbol(document_import,1).
+my_standard_symbol(document_export,1).
+my_standard_symbol(local,1).
+my_standard_symbol(mode,1).
+my_standard_symbol(index,1).
+my_standard_symbol(if,1).
+my_standard_symbol(elseif,1).
+my_standard_symbol(endif,0).
+my_standard_symbol('_$builtin',1). % not in the following table:
+my_standard_symbol(UP,UA) :- standard_symbol(UP,UA,_Module).
+my_standard_symbol(P,A) :- clause(user_annotation(G),_), functor(G,P,A).
+
+% Type == dynamic or export
+process_specs_defined(V,_Vars,BFileName,Position,_Type) :- var(V), !, 
+	may_assert_xsb_metavar_call(BFileName,'_$main',0,Position).
+process_specs_defined((Specs as _),Vars,BFileName,Position,Type) :- !,
+	process_specs_defined(Specs,Vars,BFileName,Position,Type).
+process_specs_defined((Spec1,Spec2),Vars,BFileName,Position,Type) :- !,
+	process_specs_defined(Spec1,Vars,BFileName,Position,Type),
+	process_specs_defined(Spec2,Vars,BFileName,Position,Type).
+process_specs_defined([Spec|Specs],Vars,BFileName,Position,Type) :- !,
+	process_specs_defined(Spec,Vars,BFileName,Position,Type),
+	process_specs_defined(Specs,Vars,BFileName,Position,Type).
+process_specs_defined([],_Vars,_BFileName,_Position,_Type) :- !.
+process_specs_defined(Spec,Vars,BFileName,Position,Type) :-
+	(Spec = Pred/Arity
+	 ->	functor(Head,Pred,Arity)
+	 ;	functor(Spec,Pred,Arity), Head=Spec
+	),
+	(Type== ('dynamic')
+	% -> true % After all, this would seem BAD! asserts et. al. do define predicates, this is just... a directive for execution 
+	-> may_assert_xsb_defined(Pred,Arity,BFileName,Position,Head-Vars,false)
+	; may_assert_xsb_export_defined(Pred,Arity,BFileName,Position)
+	).
+
+process_specs_used((Spec1,Spec2),Vars,BFileName,FromModule,Position) :- !, % catching meta calls ????
+	process_specs_used(Spec1,Vars,BFileName,FromModule,Position),
+	process_specs_used(Spec2,Vars,BFileName,FromModule,Position).
+process_specs_used([Spec1|Specs],Vars,BFileName,FromModule,Position) :- !,
+	process_specs_used(Spec1,Vars,BFileName,FromModule,Position),
+	process_specs_used(Specs,Vars,BFileName,FromModule,Position).
+process_specs_used([],_Vars,_BFileName,_FromModule,_Position) :- !.
+process_specs_used(Spec,_Vars,BFileName,FromModule,Position) :-
+	(Spec = Pred/Arity
+	 ->	true
+	 ;	functor(Spec,Pred,Arity)
+	),
+	% assert(xsb_used(Pred,Arity,BFileName,???,???)).
+	may_assert_xsb_import_defined(BFileName,Position,Pred,Arity,FromModule).
+
+llappend([X|L1],L2,[X|L3]) :- llappend(L1,L2,L3).
+llappend([],L,L).
+
+process_uses(MetaVar,_Vars,BFileName,Pred,Arity,Position) :- var(MetaVar), !,
+	may_assert_xsb_metavar_call(BFileName,Pred,Arity,Position). % we could retain the textual variable name, but for now...
+process_uses(true,_Vars,_BFileName,_Pred,_Arity,_Position) :- !. 
+process_uses(!,_Vars,_BFileName,_Pred,_Arity,_Position) :- !.
+process_uses(findall(_,Body,_),Vars,BFileName,Pred,Arity,Position) :- nonvar(Body), !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(tfindall(_,Body,_),Vars,BFileName,Pred,Arity,Position) :- nonvar(Body), !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(':'(Module,B),Vars,BFileName,Pred,Arity,Position) :- atom(Module), nonvar(B), !,
+	process_specs_used(B,Vars,BFileName,Module,Position), % not quite.... valid only for this one! ???? my bug, not David's!
+	process_uses(B,Vars,BFileName,Pred,Arity,Position).
+process_uses(setof(_,_^Body,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(bagof(_,_^Body,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(setof(_,Body,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(bagof(_,Body,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(catch(Call,_Ball,Handler),Vars,BFileName,Pred,Arity,Position) :-
+	process_uses(Call,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Handler,Vars,BFileName,Pred,Arity,Position).
+process_uses(\+(Body),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(tnot(Body),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(not(Body),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(once(Body),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(call(Body),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(call_tv(Body,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body,Vars,BFileName,Pred,Arity,Position).
+process_uses(clause(Head,_),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Head,Vars,BFileName,Pred,Arity,Position).
+process_uses(G,Vars,BFileName,Pred,Arity,Position) :- functor(G,tphrase,N), (N=1;N=2;N=3), !,
+	% assumes Body is a simple goal, whereas in general..... see lib/dcg.P
+	arg(1,G,Body),
+	Body =..L1, append(L1,[_,_],L2), NewBody=.. L2,
+	process_uses(NewBody,Vars,BFileName,Pred,Arity,Position).
+process_uses(G,Vars,BFileName,Pred,Arity,Position) :- functor(G,phrase,N), (N=2;N=3), !,
+	% assumes Body is a simple goal, whereas in general..... see lib/dcg.P
+	arg(1,G,Body),
+	Body =..L1, append(L1,[_,_],L2), NewBody=.. L2,
+	process_uses(NewBody,Vars,BFileName,Pred,Arity,Position).
+process_uses(Goal,Vars,BFileName,Pred,Arity,Position) :- is_lib_dir_definition(Goal,BFileName,_,_), % includes some asserts/retracts; 
+	may_assert_xsb_lib_dir_defined(BFileName,Pred,Arity,Position,Goal,Vars), 
+	fail. % so xsb_used can still be built
+process_uses(assert(Term),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(asserta(Term),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(assertz(Term),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(asserti(Term,_),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(assertai(Term,_),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(assertzi(Term,_),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(retract(Term),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position),
+	% It's also as if we were doing call(Term):
+	process_uses(Term,Vars,BFileName,Pred,Arity,Position).
+%TODO: assert/retract(Var) should flag a warning!
+process_uses(retractall(Term),Vars,BFileName,Pred,Arity,Position) :- nonvar(Term), !,
+	process_assert(Term,Vars,BFileName,Pred,Arity,Position).
+process_uses(export(_),_,_BFileName,_Pred,_Arity,_Position) :-  !. % handled by process_specs_defined
+process_uses(module(_,_),_,_BFileName,_Pred,_Arity,_Position) :-  !. % handled by process_specs_defined
+process_uses(Goal,Vars,BFileName,Pred,Arity,Position) :- is_load_operation_call(Goal,BFileName,_,_), 
+	may_assert_xsb_load_operation_call(BFileName,Pred,Arity,Position,Goal,Vars),
+	fail.
+process_uses((Body1,Body2),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body1,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body2,Vars,BFileName,Pred,Arity,Position).
+process_uses((Body1->Body2),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body1,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body2,Vars,BFileName,Pred,Arity,Position).
+process_uses((Body1->Body2;Body3),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body1,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body2,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body3,Vars,BFileName,Pred,Arity,Position).
+process_uses((Body1;Body2),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body1,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body2,Vars,BFileName,Pred,Arity,Position).
+process_uses(forall(Body1,Body2),Vars,BFileName,Pred,Arity,Position) :- !,
+	process_uses(Body1,Vars,BFileName,Pred,Arity,Position),
+	process_uses(Body2,Vars,BFileName,Pred,Arity,Position).
+process_uses(Body,Vars,BFileName,Pred,Arity,Position) :-
+	functor(Body,UPred,UArity),
+	may_assert_xsb_used(UPred,UArity,BFileName,Pred,Arity,Position),
+	( xjSubtermGoal(Body,G), process_uses(G,Vars,BFileName,Pred,Arity,Position), fail ; true).
+
+% is_lib_dir_definition(+NonvarG,+File,-PathOrPaths,-annotated/normal)
+is_lib_dir_definition(add_this_lib_dir,File,P,normal) :- !, parse_filename(File,D,_,_), replace_backslashes(D,P).
+is_lib_dir_definition(add_lib_dir(P),_,P,normal) :- !.
+is_lib_dir_definition(add_lib_dir(Base,P),_,[Base,P],normal) :- !.
+is_lib_dir_definition(bootstrap_package(Dirs,_),_,Dirs,normal) :- !.
+is_lib_dir_definition(bootstrap_sitepackage(Dirs,_),_,Dirs,normal) :- !.
+is_lib_dir_definition(bootstrap_userpackage(LibraryDir,PackageDir,_),_,[LibraryDir,PackageDir],normal) :- !.
+is_lib_dir_definition(ensure_package_bootstrapped(Dirs,_),_,Dirs,normal) :- !.
+is_lib_dir_definition(assert(T),_,D,normal) :- nonvar(T), T=library_directory(D), !.
+is_lib_dir_definition(asserta(T),_,D,normal) :- nonvar(T), T=library_directory(D), !.
+is_lib_dir_definition(assertz(T),_,D,normal) :- nonvar(T), T=library_directory(D), !.
+is_lib_dir_definition(retract(T),_,D,normal) :- nonvar(T), T=library_directory(D), !. % These 2 should be flaged as errors
+is_lib_dir_definition(retractall(T),_,D,normal) :- nonvar(T), T=library_directory(D), !.
+is_lib_dir_definition(G,File,P,annotated) :- 
+	xsb_meta_annotation(File,_Position,xsb_add_lib_predicate(GG,PP),_Vars), subsumes_chk(GG,G), 
+	!, G=GG, P=PP. % This overrides global definitions:
+is_lib_dir_definition(G,_File,P,annotated) :- 
+	xsb_meta_annotation(_,_Position,global(xsb_add_lib_predicate(GG,PP)),_Vars), subsumes_chk(GG,G), 
+	!, G=GG, P=PP.
+
+% Cf. XSB's consult.H export list
+% is_load_operation_call(+NonVarG,+File,-PathOrPaths,-annotated/normal)
+is_load_operation_call(G,_,P,normal) :- is_list(G), !, member(P,G).
+is_load_operation_call(consult(P),_,P,normal) :- !.
+is_load_operation_call(consult(P,_),_,P,normal) :- !.
+is_load_operation_call(reconsult(P),_,P,normal) :- !.
+is_load_operation_call(reconsult(P,_),_,P,normal) :- !.
+is_load_operation_call(ensure_loaded(P),_,P,normal) :- !.
+is_load_operation_call(ensure_loaded(P,_),_,P,normal) :- !.
+is_load_operation_call(ensure_loaded(P,_,_Module),_,P,normal) :- !.
+is_load_operation_call(ensure_dyn_loaded(P),_,P,normal) :- !.
+is_load_operation_call(ensure_dyn_loaded(P,_,_Module),_,P,normal) :- !.
+is_load_operation_call(ensure_dync_loaded(P),_,P,normal) :- !.
+is_load_operation_call(ensure_dync_loaded(P,_,_Module),_,P,normal) :- !.
+is_load_operation_call(load_dyn(P),_,P,normal) :- !.
+is_load_operation_call(load_dyn(P,_),_,P,normal) :- !.
+is_load_operation_call(load_dyn(P,_,_Module),_,P,normal) :- !.
+is_load_operation_call(load_dync(P),_,P,normal) :- !.
+is_load_operation_call(load_dync(P,_),_,P,normal) :- !.
+is_load_operation_call(load_dync(P,_,_Module),_,P,normal) :- !.
+% now some proc_files predicates; missing load_with_header/2:
+is_load_operation_call(load_csv(P,_),File,P,normal) :- xsb_import_defined(File,_Pos,load_csv,2,proc_files), !.
+is_load_operation_call(load_psv(P,_),File,P,normal) :- xsb_import_defined(File,_Pos,load_psv,2,proc_files), !.
+is_load_operation_call(load_dsv(P,_,_),File,P,normal) :- xsb_import_defined(File,_Pos,load_dsv,3,proc_files), !.
+is_load_operation_call(read_dsv(P,_,_),File,P,normal) :- xsb_import_defined(File,_Pos,read_dsv,3,proc_files), !.
+is_load_operation_call(G,File,P,annotated) :- xsb_meta_annotation(File,_Position,xsb_loader_predicate(GG,PP),_Vars), 
+	subsumes_chk(GG,G), !, G=GG,P=PP. % This overrides global definitions:
+is_load_operation_call(G,_File,P,annotated) :- xsb_meta_annotation(_,_Position,global(xsb_loader_predicate(GG,PP)),_Vars), 
+	subsumes_chk(GG,G), !, GG=G,PP=P.
+
+% This is NOT treating assert(usermod:foo(bar)) called inside modules properly; that would require more 
+% information kept in xsb_defined, and it seems bad programming practice anyway... (there should be a usermod predicate
+% to maintain foo/1 )
+process_assert(Term,Vars,BFileName,_Pred,_Arity,Position) :-
+	(Term = (Head:-Body)
+	 ->	true
+	 ;	Head = Term, Body = true
+	),
+	(nonvar(Head)
+	 ->	functor(Head,NPred,NArity),
+	 	% We could carry the clause vars list down to here and improve this:
+		may_assert_xsb_defined(NPred,NArity,BFileName,Position,Head-Vars,true),
+		(Body == true
+		 ->	true
+		 ;	process_uses(Body,Vars,BFileName,NPred,NArity,Position)
+		)
+	 ;      true
+	).
+
+
+% to go easier on our memory usage, only the first use is recorded
+% 
+may_assert_xsb_metavar_call(BFileName,Pred,Arity,_Position) :- xsb_metavar_call(BFileName,Pred,Arity,_), !.
+may_assert_xsb_metavar_call(BFileName,Pred,Arity,Position) :- assert(xsb_metavar_call(BFileName,Pred,Arity,Position)).
+
+may_assert_xsb_lib_dir_defined(BFileName,Pred,Arity,Position,Goal1,Vars1) :- 
+	xsb_lib_dir_defined(BFileName,Pred,Arity,Position,Goal2,Vars2), 
+	\+ \+ (bindAllVars(Vars1),bindAllVars(Vars2),variant(Goal1,Goal2)), !.
+may_assert_xsb_lib_dir_defined(BFileName,Pred,Arity,Position,Goal,Vars) :- assert(xsb_lib_dir_defined(BFileName,Pred,Arity,Position,Goal,Vars)).
+
+may_assert_xsb_load_operation_call(BFileName,Pred,Arity,Position,Goal1,Vars1) :- 
+	xsb_load_operation_call(BFileName,Pred,Arity,Position,Goal2,Vars2), 
+	\+ \+ (bindAllVars(Vars1),bindAllVars(Vars2),variant(Goal1,Goal2)), !.
+may_assert_xsb_load_operation_call(BFileName,Pred,Arity,Position,Goal,Vars) :- assert(xsb_load_operation_call(BFileName,Pred,Arity,Position,Goal,Vars)).
+
+may_assert_xsb_meta_annotation(Annotation1,BFileName,Position,Vars1) :- 
+	xsb_meta_annotation(BFileName,Position,Annotation,Vars), 
+	\+ \+ (bindAllVars(Vars1),bindAllVars(Vars),variant(Annotation1,Annotation)), !.
+may_assert_xsb_meta_annotation(Annotation,BFileName,Position,Vars) :- assert(xsb_meta_annotation(BFileName,Position,Annotation,Vars)).
+
+may_assert_xsb_used(UPred,UArity,BFileName,Pred,Arity,_Position) :- xsb_used(UPred,UArity,BFileName,Pred,Arity,_), !.
+may_assert_xsb_used(UPred,UArity,BFileName,Pred,Arity,Position) :- assert(xsb_used(UPred,UArity,BFileName,Pred,Arity,Position)).
+
+% may_assert_xsb_defined(Pred,Arity,BFileName,Position,Head-ClauseVars,ProperDefinition)
+%  Proper==true if the definition is NOT a mere :- dynamic Pred/Arity
+%  Prefers to remember only proper definitions
+may_assert_xsb_defined(Pred,Arity,BFileName,_,_,false) :- xsb_defined(Pred,Arity,BFileName,_,_,_), !.
+may_assert_xsb_defined(Pred,Arity,BFileName,_,_,true) :- 
+	( xsb_defined(Pred,Arity,BFileName,_,_,true) ; retractall(xsb_defined(Pred,Arity,BFileName,_,_,_)), fail), 
+	!.
+may_assert_xsb_defined(Pred,Arity,BFileName,Position,Head-ClauseVars,Proper) :- 
+	( Head =.. [_|Args], allVars(Args), \+ \+ numbervars(Args, 0, Arity) ) 
+	-> % This head has good args to keep: all distinct variables
+		\+ \+ ((
+			bindAllVars(ClauseVars), baptizeVars(Args,1) /* Anonymous...*/, 
+			assert(xsb_defined(Pred,Arity,BFileName,Position,Args,Proper))
+			))
+	; % Too bad, we'll keep ugly var names:
+		(( 
+			functor(Head_,Pred,Arity), Head_ =.. [_|Args_],
+			\+ \+ ((baptizeVars(Args_,1), assert(xsb_defined(Pred,Arity,BFileName,Position,Args_,Proper))))
+		)).
+
+allVars([V|Vars]) :- !, var(V), allVars(Vars).
+allVars([]).
+
+% also closes var tailed lists
+bindAllVars([]) :- !.
+bindAllVars([VV|Vars]) :- 
+	arg(1,VV,Name), arg(2,VV,Value), 
+	(var(Value) -> Value=Name ; true), bindAllVars(Vars).
+
+baptizeVars([V|Vars],N) :- var(V), !, concat_atom(['A',N],V), NN is N+1, baptizeVars(Vars,NN).
+baptizeVars([_V|Vars],N) :- !, baptizeVars(Vars,N).
+baptizeVars([],_).
+	
+may_assert_xsb_export_defined(Pred,Arity,BFileName,__Position) :- xsb_export_defined(Pred,Arity,BFileName,_Position), !.
+may_assert_xsb_export_defined(Pred,Arity,BFileName,Position) :- assert(xsb_export_defined(Pred,Arity,BFileName,Position)).
+
+may_assert_xsb_import_defined(BFileName,__Position,Pred,Arity,FromModule) :- 
+	xsb_import_defined(BFileName,_Position,Pred,Arity,FromModule),!.
+may_assert_xsb_import_defined(BFileName,Position,Pred,Arity,FromModule) :- 
+	assert(xsb_import_defined(BFileName,Position,Pred,Arity,FromModule)).
+
+may_assert_xref_syntactic_error(BFileName,Position) :- xref_syntactic_error(BFileName,Position), !.
+may_assert_xref_syntactic_error(BFileName,Position) :- assert(xref_syntactic_error(BFileName,Position)).
+
+may_assert_xsb_singleton_vars([],_BFileName,_Position,_) :- !.
+may_assert_xsb_singleton_vars(_Occurences,BFileName,Position,_) :- xsb_singleton_vars(BFileName,_,Position), !.
+may_assert_xsb_singleton_vars(_Occurences,_BFileName,_Position,Options) :- 
+	\+ member(all_singletons,Options), coninc('_$singletonCnt',Count), Count >10, !.
+may_assert_xsb_singleton_vars(Occurences,BFileName,Position,_) :- assert(xsb_singleton_vars(BFileName,Occurences,Position)).
+
+% typically used for Windows path cleanup; also replaces \\ by /
+% replace_backslashes(+P,-NP)
+:- table replace_backslashes/2 as incremental.
+replace_backslashes(P,NP) :- atom(P), str_replace(P,'\\\\','/',NP_), str_replace(NP_,'\\','/',NP).
+
+% is_module_file(+F,-ModuleName)
+:- table is_module_file/2 as incremental.
+is_module_file(F,ModuleName) :- xsb_export_defined(_,_,F,_), !, parse_filename(F,_,Base,_), Base=ModuleName.
+
+module_of_file(FilePrefix,Module) :- is_module_file(FilePrefix,Module) -> true ; Module=usermod.
+
+
+xref_redefined_predicate(Pred,Arity,InFile,Position,OtherFile) :-
+	xsb_defined(Pred,Arity,InFile,Position,_,true), % we don't care about :- dynamics "definitions"
+	xsb_defined(Pred,Arity,OtherFile,_,_,true), 
+	InFile \== OtherFile,
+	module_of_file(InFile,Module1), module_of_file(OtherFile,Module2),
+	once((
+		Module1==Module2 /* must be usermod */ ; 
+		Module1==usermod, xsb_import_defined(InFile,_,Pred,Arity,Module2), xsb_export_defined(Pred,Arity,OtherFile,_); 
+		Module2=usermod, xsb_import_defined(OtherFile,_,Pred,Arity,Module1), xsb_export_defined(Pred,Arity,InFile,_)
+		)).
+
+% Thanks to XSB Inc.'s for str_replace/4, copied here:
+%%%%%
+str_replace(A, X, Y, B) :-
+    atom_chars(A, Ac), atom_chars(X, Xc), atom_chars(Y, Yc),
+    str_replace1(Ac, Xc, Yc, Bc), concat_atom(Bc, B).
+
+str_replace1([], _, _, []).
+str_replace1(Ac, Xc, Yc, [B|C]) :-
+    (append(Xc, Zc, Ac)
+     -> B = Yc, str_replace1(Zc, Xc, Yc, C)
+     ;  Ac = [A|Acs], B = A, str_replace1(Acs, Xc, Yc, C)
+    ).
+
+ 

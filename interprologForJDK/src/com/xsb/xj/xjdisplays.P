@@ -1,0 +1,545 @@
+:- import term_to_atom/2, concat_atom/2 from string.
+:- import merge/3 from listutil.
+:- import member/2 from basics.
+:- import buildInitiallyFlatTermModel/2, buildTermModelArray/2, ipObjectSpec/4, ipPrologEngine/1, recoverTermModelArray/2, 
+	javaMessage/3, javaMessage/2, recoverTermModel/2, buildTermModel/2, stringArraytoList/2 from interprolog.
+
+:- dynamic ipListenerWindow/1.
+
+%-Modal Input----------------------------------------------------------
+
+:- comment(chooseFromTerms/6,"Returns a list of zero (user cancelled) or more 
+selected terms from the given term set. MaxChoices determines how many terms may 
+be selected (chosen) by the user; 2 or more means infinite.
+(+Pred/Arity,+Type,+ContextDescription,+Context,+MaxChoices,-Picked) "). 
+
+chooseFromTerms(P,Type,CD,C,MaxChoices,Chosen):-
+   integer(MaxChoices), MaxChoices>0,
+   ipObjectSpec('int',MaxChoicesInt,[MaxChoices],_),
+   createTermSetGUI(P,Type,CD,C,GUI),
+   xjDesktop(D),
+   javaMessage('com.xsb.xj.TermChooserDialog',Dialog,
+      'TermChooserDialog'(D,GUI,MaxChoicesInt)),
+   javaMessage(Dialog,ChosenI,choose),
+   (ChosenI = null
+    ->	   Chosen = []
+    ;	   ipPrologEngine(E),
+	   javaMessage(E,ChosenArray,getRealJavaObject(ChosenI)),
+	   recoverTermModelArray(ChosenArray,Chosen)
+   ).
+
+:- comment(chooseFromTerms/3,"Returns a list of zero (user cancelled) or more 
+selected terms from the given term set. MaxChoices determines how many terms may 
+be selected (chosen) by the user; 2 or more means infinite.
+(+TreeOrListGt,+MaxChoices,-Picked) "). 
+
+chooseFromTerms(Gt,MaxChoices,Chosen):-
+   integer(MaxChoices), MaxChoices>0,
+   ipObjectSpec('int',MaxChoicesInt,[MaxChoices],_),
+   createXJcomponent(Gt,GUI),
+   xjDesktop(D),
+   javaMessage('com.xsb.xj.TermChooserDialog',Dialog,
+      'TermChooserDialog'(D,GUI,MaxChoicesInt)),
+   javaMessage(Dialog,ChosenI,choose),
+   (ChosenI = null
+    ->	   Chosen = []
+    ;	   ipPrologEngine(E),
+	   javaMessage(E,ChosenArray,getRealJavaObject(ChosenI)),
+	   recoverTermModelArray(ChosenArray,Chosen)
+   ).
+
+%-Prompt User----------------------------------------------------------
+   
+:- comment(xjAskUser/2,"Fails if user cancels. Displays ok and cancel buttons.
+(+Question,-Answer). This predicate has been deprecated use xjAskUser/4 ").
+
+xjAskUser(Question,Answer) :-
+	xjAskUser(null, '', Question, '', Answer).
+
+:- comment(xjAskUser/3,"Fails if user cancels. Displays ok and cancel buttons.
+(+Question,?DefaultAnswer,-Answer). This predicate has been deprecated use 
+xjAskUser/4 ").
+
+xjAskUser(Question,InitialValue,Answer) :-
+	xjAskUser(null, '', Question, InitialValue, Answer).
+
+:- comment(xjAskUser/4,"Fails if user cancels. Displays ok and cancel buttons.
+(+ParentWindow,+Question,?DefaultAnswer,-Answer) ").
+
+xjAskUser(ParentWindow,Question,InitialValue,Answer) :-
+	xjAskUser(ParentWindow, '', Question, InitialValue, Answer).
+	
+xjAskUser(ParentWindow, Title, Question, InitialValue, Answer) :-
+	(is_list(Question)
+	->	concat_atom(Question, Question1)
+	;	atom(Question), 
+		Question1 = Question),
+
+   	atom(InitialValue),
+	atom(Title),
+	
+   	ipObjectSpec(int,Three,[3],_),
+   	javaMessage('javax.swing.JOptionPane',string(Answer),
+		showInputDialog(ParentWindow,string(Question1),string(Title),
+			Three,null,null,string(InitialValue))).
+
+
+:- comment(xjAskNumber/5,"Produces a modal dialog to asking the user for 
+a number. (+Question,+Title,?InitialValue,+Type{float,integer},-num(Result)).
+This predicate has been deprecated use xjAskNumber/6").
+
+xjAskNumber(Question,Title,InitialValue,Type,Result) :-
+	xjAskNumber(null, Question, Title, InitialValue, Type, Result).
+
+
+:- comment(xjAskNumber/6,"Produces a modal dialog to asking the user for 
+a number. (+ParentContainer,+Question,+Title,?InitialValue,+Type{float,integer},
+-num(Result)) ").
+
+xjAskNumber(ParentContainer,Question,Title,InitialValue,Type,Result) :-
+   ( var(InitialValue)->InitialValue='';true),
+   (is_list(Question)
+   ->	concat_atom(Question, Question1)
+   ;	atom(Question),
+	    Question1 = Question),
+		 
+   Mygt = gt(num,[class='com.xsb.xj.containers.LabelValueColumn',updatable],[
+            gt(InitialValue,[Type,root,caption=Question1],[])]),
+   
+   createXJcomponent(Mygt,Mygui),               
+   javaMessage('com.xsb.xj.TermEditorDialog',Dialog,
+      'TermEditorDialog'(ParentContainer,Mygui)),
+      
+   javaMessage(Dialog,setTitle(string(Title))),
+   javaMessage(Dialog,setJMenuBar(null)),
+   javaMessage(Dialog,ResultModel,edit),!,
+   (ResultModel=null
+   ->   fail
+   ;    recoverTermModel(ResultModel,Result)).
+
+
+:- comment(xjConfirmUser/2,"Fails if user cancels. Displays ok and cancel buttons.
+This predicate has been deprecated use xjConfirmUser/3. (+Title,+Message)").
+
+xjConfirmUser(Title,Message) :-
+	xjConfirmUser(null, Title, Message).
+ 
+
+:- comment(xjConfirmUser/3,"Fails if user cancels. Displays ok and cancel buttons.
+(+ParentWindow, +Title, +Message)").
+
+xjConfirmUser(ParentWindow, Title, Message) :-
+	xjConfirmUser(ParentWindow, Title, Message,null).
+xjConfirmUser(ParentWindow, Title, Message,Args) :-
+   OK_CANCEL_OPTION = 2, OK_OPTION=0, % cf. JDK 1.3 sources
+   ipObjectSpec(int,Int,[OK_CANCEL_OPTION],_),
+   (Args=null -> Atom=Message;fmt_write_string(Atom,Message,Args)),
+   javaMessage('javax.swing.JOptionPane',R,showConfirmDialog(ParentWindow,
+      string(Atom),string(Title),Int)),
+      
+   ipObjectSpec('java.lang.Integer',R,[OK_OPTION],_).
+
+%-User Notification----------------------------------------------------
+  
+:- comment(xjReportError/2,"Displays ok button. (+Title,+Message). This predicate 
+has been deprecated use xjReportError/3.").
+
+xjReportError(Title,Message) :-
+	xjReportError(null, Title, Message).
+
+:- comment(xjReportError/3,"Displays ok button. (+ParentWindow,+Title,+Message)").
+/*   
+xjReportError(ParentWindow,Title,Message) :-
+	(is_list(Message)
+	->	concat_atom(Message, Message1)
+	;	atom(Message),
+		Message1 = Message),
+		
+   ERROR_MESSAGE  = 0, 
+   ipObjectSpec(int,Int,[ERROR_MESSAGE],_),
+   javaMessage('javax.swing.JOptionPane',
+      showMessageDialog(ParentWindow,string(Message1),string(Title),Int)). 
+*/
+
+xjReportError(ParentWindow,Title,Message) :-
+	(is_list(Message)
+	->	concat_atom(Message, Message1)
+	;	atom(Message),
+		Message1 = Message),
+	(Title = ''
+	 ->	Text = Message1
+	 ;	concat_atom([Title, ': ', Message1], Text)
+	),
+	(ParentWindow = null
+	 ->	javaMessage('com.xsb.xj.util.OutputFrame', OutputFrame, 'OutputFrame')
+	 ;	javaMessage('com.xsb.xj.util.OutputFrame', OutputFrame, 'OutputFrame'(ParentWindow))
+	),
+	javaMessage(OutputFrame, addWarning(string('error'), string(Text))),
+	ipObjectSpec(boolean,TRUE,[1],_),
+	javaMessage(OutputFrame, setModal(TRUE)),
+	javaMessage(OutputFrame, setVisible(TRUE)).
+      
+:- comment(xjNotifyUser/2,"Displays ok button. (+Title,+Message). This predicate
+has been deprecated use xjNotifyUser/3.").
+   
+xjNotifyUser(Title,Message) :-
+	xjNotifyUser(null, Title, Message).
+
+      
+:- comment(xjNotifyUser/3,"Displays ok button. (+ParentContainer,+Title,+Message)").
+   
+xjNotifyUser(ParentContainer,Title,Message) :-
+	(is_list(Message)
+	->	concat_atom(Message, Message1)
+	;	atom(Message),
+		Message1 = Message),
+		
+	NOTIFY_FLAG  = 1, 
+	ipObjectSpec(int,Int,[NOTIFY_FLAG],_),
+	javaMessage('javax.swing.JOptionPane',
+      showMessageDialog(ParentContainer,string(Message1),string(Title),Int)).
+
+%-Application About Dialog---------------------------------------------
+   
+:- comment(xjShowAboutDialog/4,"Displays generic about dialog. 
+(+ParentContainer, +Title, +Message, +IconLocation) ").
+
+xjShowAboutDialog(ParentContainer,Title,Message,IconLocation) :-
+	(is_list(Message)
+	->	concat_atom(Message, Message1)
+	;	atom(Message),
+		Message1 = Message),
+		
+	NOTIFY_FLAG  = 1, 
+	ipObjectSpec(int,Int,[NOTIFY_FLAG],_),
+	%% create icon object
+	javaMessage('javax.swing.ImageIcon',Icon,'ImageIcon'(string(IconLocation))),
+	javaMessage('javax.swing.JOptionPane',
+      showMessageDialog(ParentContainer,string(Message1),string(Title),Int,Icon)).
+
+%----------------------------------------------------------------------
+      
+:- comment(xjShowOptionDialog/4,"To display a modal dialog with a question message 
+and a set of buttons to click on to answer that message. 
+(+Title, +Message, +ButtonList, -ChosenButton) This predicate has been depreacted
+use xjShowOptionDialog/5").
+
+xjShowOptionDialog(Title, Message, ButtonList, ChosenButton):-
+	xjShowOptionDialog(Title, Message, ButtonList, null, ChosenButton).
+
+:- comment(xjShowOptionDialog/5,"To display a modal dialog with a question message 
+and a set of buttons to click on to answer that message. 
+(+Title, +Message, +ButtonList, +Container -ChosenButton)").
+
+xjShowOptionDialog(Title, Message, ButtonList, ParentContainer, ChosenButton):-
+	(is_list(Message)
+	->	concat_atom(Message, Message1)
+	;	atom(Message),
+		Message1 = Message), 
+		
+	atom(Title),
+	is_list(ButtonList),
+	stringArraytoList(Buttons, ButtonList),
+	javaMessage('com.xsb.xj.util.XJOptionDialog',Dialog,
+      'XJOptionDialog'(string(Title), string(Message1), Buttons, ParentContainer)),
+      
+	javaMessage(Dialog,JChosenButton,show),
+	\+(JChosenButton = null),
+	JChosenButton=string(ChosenButton).
+
+%-File Chooser---------------------------------------------------------
+
+:- comment(xjPickFile/3,"Displays file chooser. Fails if user cancels. 
+ExtensionList contains all file types that should be shown without dot, e.g. 
+['P',java] Uses the user home directory as start directory
+(+ExtensionList,+ApproveText,-FilePath). ").
+
+xjPickFile(Extensions,ApproveText,File) :-
+	xjPickFile(null, 'user.home', Extensions, ApproveText, File).
+
+:- comment(xjPickFile/4,"Displays file chooser. Fails if user cancels. 
+ExtensionList contains all file types that should be shown without dot, e.g. 
+['P',java].
+(+StartDirectory,+ExtensionList,+ApproveText,-FilePath). ").
+   
+xjPickFile(StartDirectory, Extensions, ApproveText, File) :-
+	xjPickFile(null, StartDirectory, Extensions, ApproveText, File).
+	
+xjPickFile(Parent, StartDirectory, Extensions, ApproveText, File) :-
+
+   atom(ApproveText), is_list(Extensions),atom(StartDirectory),
+   stringArraytoList(StringArray,Extensions),ipObjectSpec(boolean,FALSE,[0],_),
+   javaMessage('com.xsb.xj.XJFileChooser',FC,
+      'XJFileChooser'(Parent, string(StartDirectory),string(ApproveText),StringArray,FALSE)),
+      
+   javaMessage(FC,string(File),pickFile).
+
+   
+%-Directory Chooser----------------------------------------------------
+ 
+:- comment(xjPickDirectory/2,"Displays file chooser but only directories are
+shown. Assumes user home as start directory. (+ApproveText,-Dir).").
+   
+xjPickDirectory(ApproveText,Dir) :-
+	xjPickDirectory(null, 'user.home', ApproveText, Dir).
+
+:- comment(xjPickDirectory/3,"Displays file chooser but only directories are
+shown. (+StartDirectory, +ApproveText, -Dir) ").
+   
+xjPickDirectory(StartDirectory, ApproveText, Dir) :-
+	xjPickDirectory(null, StartDirectory, ApproveText, Dir).
+	
+xjPickDirectory(Parent, StartDirectory, ApproveText, Dir) :-
+	
+   atom(ApproveText), atom(StartDirectory), stringArraytoList(StringArray,[]),
+   ipObjectSpec(boolean,FALSE,[0],_),ipObjectSpec(int,DIR_ONLY,[1],_),
+   javaMessage('com.xsb.xj.XJFileChooser',FC,
+      'XJFileChooser'(Parent, string(StartDirectory),string(ApproveText),StringArray,FALSE)),
+      
+   javaMessage(FC,setFileSelectionMode(DIR_ONLY)),
+   javaMessage(FC,string(Dir),pickDir).
+
+   
+:- comment(xjPickDirectories/2,"Displays file chooser but only directories are
+shown. Multiple directories can be chosen. Assumes start directory is user home.
+(+ApproveText,-Path_List) ").
+   
+xjPickDirectories(ApproveText,Str_List) :-
+	xjPickDirectories(null, 'user.home', ApproveText, Str_List).
+   
+:- comment(xjPickDirectories/2,"Displays file chooser but only directories are
+shown. Multiple directories can be chosen. 
+(+StartDirectory, +ApproveText,-Path_List) ").  
+   
+xjPickDirectories(StartDirectory, ApproveText, Str_List) :-
+	xjPickDirectories(null, StartDirectory, ApproveText, Str_List).
+
+xjPickDirectories(Parent, StartDirectory, ApproveText, Str_List) :-	
+   atom(ApproveText), atom(StartDirectory), stringArraytoList(StringArray,[]),
+   ipObjectSpec(boolean,TRUE,[1],_),ipObjectSpec(int,DIR_ONLY,[1],_),
+   javaMessage('com.xsb.xj.XJFileChooser',FC,
+      'XJFileChooser'(Parent, string(StartDirectory),string(ApproveText),StringArray,TRUE)),
+      
+   javaMessage(FC,setFileSelectionMode(DIR_ONLY)),
+   javaMessage(FC,Array,pickDirs),
+   (Array = null
+    ->	   Str_List = []
+    ;	   ipPrologEngine(E),javaMessage(E,Str_Array,getRealJavaObject(Array)), 
+	   stringArraytoList(Str_Array,Str_List)
+   ).
+
+%-Widget for displaying OMS Errors-------------------------------------
+
+:- comment(xj_display_errors/2,"Displays a list of message in modal error
+dialog using a scrollable text area. (+Title,+MessageList)").
+
+xj_display_errors(Title,MessageList) :-
+   nonvar(Title), nonvar(MessageList),
+   terms_to_atom(MessageList,Messages),
+   
+   ipObjectSpec(int,ERROR_MSG,[0],_),
+   ipObjectSpec(boolean,FALSE,[0],_),
+   ipObjectSpec(boolean,TRUE,[1],_),
+
+   %create message area
+   javaMessage('javax.swing.JTextArea',MsgArea,'JTextArea'(string(Messages))),
+   javaMessage(MsgArea,setEditable(FALSE)),
+   javaMessage(MsgArea,setLineWrap(TRUE)),
+   javaMessage(MsgArea,setWrapStyleWord(TRUE)),
+   
+   %create scrollpane
+   javaMessage('javax.swing.JScrollPane',SPane,'JScrollPane'(MsgArea)),
+   ipObjectSpec(int,WIDTH,[300],_),
+   ipObjectSpec(int,HEIGHT,[100],_),
+   javaMessage('java.awt.Dimension',D,'Dimension'(WIDTH,HEIGHT)),
+   javaMessage(SPane,setPreferredSize(D)),
+   
+   %display optionpane.
+   javaMessage('javax.swing.JOptionPane',_,showMessageDialog(null,SPane,string(Title),ERROR_MSG)).
+
+   % turns a list of terms into a big atom with sub atoms separated
+   % by \n for displaying in java.
+terms_to_atom([A|B],C) :-
+   atom_codes(EOL,[10]),
+   term_to_atom(A,A1),
+   terms_to_atom(B,D),
+   concat_atom([A1,EOL,D],C).
+terms_to_atom([],EOL) :-
+   atom_codes(EOL,[10]).
+
+%----------------------------------------------------------------------
+   
+:- comment(xjShowURL/1,"Displays URL using system browser. (+URL) ").
+   
+xjShowURL(URL) :- 
+   atom(URL), 
+   javaMessage('com.xsb.xj.util.BrowserControl',displayURL(string(URL))).
+
+%-Term Editing---------------------------------------------------------
+   
+
+editTermInDialog(Term,ContextDescription):-
+   createTermGUI(Term,ContextDescription,TermComponent),
+   xjDesktop(D),
+   javaMessage('com.xsb.xj.TermDialogView',_Dialog,
+      'TermDialogView'(TermComponent,D)).
+
+editTermInDialog(Term, ContextDescription, Gt):-
+   createTermGUIFromGT(Term,ContextDescription,Gt, TermComponent),
+   xjDesktop(D),
+   javaMessage('com.xsb.xj.TermDialogView',_Dialog,
+      'TermDialogView'(TermComponent,D)).
+
+editNewTermInDialog(Pred,Type,ContextDescription):-
+   createNewTermGUI(Pred,Type,ContextDescription,TermComponent),
+   xjDesktop(D),
+   javaMessage('com.xsb.xj.TermDialogView',_Dialog,
+      'TermDialogView'(TermComponent,D)).
+
+:- comment(editGtGetResult/3,"Displays GuiTerm in container with Ok/Cancel buttons.
+(+Gt, -Result)").
+
+editGtGetResult(ParentContainer,Gt,Result):-
+   createXJcomponent(Gt, GUI),
+   javaMessage('com.xsb.xj.TermEditorDialog',Dialog,'TermEditorDialog'(ParentContainer,GUI)),
+   javaMessage(Dialog,ResultModel,edit),!,
+   (ResultModel=null
+    ->   fail
+    ; recoverTermModel(ResultModel,Result)
+   ).
+
+:- comment(editTermGetResult/3,"Displays term in container with Ok/Cancel buttons.
+This predicate has been deprecated use editTermGetResult/4. 
+(+Term, +ContextD, -Result)").
+
+editTermGetResult(Term,ContextD,Result):-
+   createTermGUI(Term,ContextD,GUI),
+   javaMessage('com.xsb.xj.TermEditorDialog',Dialog,'TermEditorDialog'(GUI)),
+   javaMessage(Dialog,ResultModel,edit),!,
+   (ResultModel=null
+    ->   fail
+    ; recoverTermModel(ResultModel,Result)
+   ).
+
+:- comment(editTermGetResult/4,"Displays term in container with Ok/Cancel buttons.
+(+ParentContainer, +Term, + ContextD, -Result)").
+
+editTermGetResult(ParentContainer,Term,ContextD,Result):-
+   createTermGUI(Term,ContextD,GUI),
+   javaMessage('com.xsb.xj.TermEditorDialog',Dialog,
+      'TermEditorDialog'(ParentContainer,GUI)),
+      
+   javaMessage(Dialog,ResultModel,edit),!,
+   ResultModel \== null,
+   recoverTermModel(ResultModel,Result).
+%%  (ResultModel=null
+%%    ->   fail
+%%    ; recoverTermModel(ResultModel,Result)
+%%   ).
+
+/*
+editTermGetResult(Term,ContextD,Result):-
+   createTermGUI(Term,ContextD,GUI),
+   xjDesktop(Desktop),
+   javaMessage(Desktop,ResultModel,getTermFormResult(GUI)),
+   (ResultModel=null
+    ->   fail
+    ; recoverTermModel(ResultModel,Result)
+   ).
+*/
+%----------------------------------------------------------------------
+
+getParentWindow(GuiComponent, Window):-
+	javaMessage('javax.swing.SwingUtilities', Window, getWindowAncestor(GuiComponent)).
+
+viewDocument(Location,Viewer):-
+   atom(Location),
+   javaMessage('com.xsb.xj.util.pageviewer.XJDocumentViewer',Viewer,'XJDocumentViewer'),
+   xjDesktop(Desktop),
+   javaMessage(Desktop,DesktopPane,getContentPane),
+   javaMessage(DesktopPane,add(Viewer,'javax.swing.JLayeredPane'-'DEFAULT_LAYER')),
+   javaMessage(DesktopPane,DesktopManager,getDesktopManager),
+   javaMessage(DesktopManager,activateFrame(Viewer)),
+   javaMessage(Viewer,loadPage(string(Location))).
+
+% xjRadioMenu(+MenuName,+Items,+Selected,-GUI) 
+% Items is list of ItemCaption(Tip,State); getTerm returns State of current selection (or null if none)
+% Selected is the (caption of the) initial selected item; null for no selection
+% e.g. ... ['Small terms'('Depth 20',20),'Normal terms'('Depth 100',100),'Huge terms'('Depth 1000',1000),'No limit'('Not really...1 million',1000000)]...
+/*
+Items=['Small terms'('Depth 20',20),'Normal terms'('Depth 100',100),'Huge terms'('Depth 1000',1000),'No limit'('Not really...1 million',1000000)], buildTermModelArray(Items,ArrayModel),
+	javaMessage('com.xsb.xj.XJDesktop',GUI,makeRadioMenu(string(menuName),ArrayModel,null))
+	*/
+xjRadioMenu(MenuName,Items,Selected,GUI) :-
+	(Selected = null -> SS = null ; SS = string(Selected)),
+	buildTermModelArray(Items,ArrayModel),
+	javaMessage('com.xsb.xj.XJDesktop',GUI,makeRadioMenu(string(MenuName),ArrayModel,SS)).
+
+
+/* Example:
+xjGenericGraph(
+	['Avenida'], segment(_NodeID1,_NodeID2,_ID,_Type,_Term,_Tip), station(_ID,_Type,_Term,_Tip),
+	[layout=frlayout2, labelsInNodes, cubicCurve, maxItems=20000],
+	[
+		accessible=[icon='http://www.berklee.edu/sites/default/files/images/BPC/wheelchair-icon.jpg'], 
+		normal=[icon='/com/coherentknowledge/fidji/flora.gif'] ],
+	[blueLine=[color=blue,dotted], 
+		greenLine=[color=green, dashed], 
+		yellowLine=[color=yellow] ],
+	_GraphUI).
+*/
+% FourArgRelation (nodes): ID, NodeType,NodeTerm,NodeTip
+% SixArgRelation (edges): NodeID1,NodeID2,EdgeID,EdgeType,EdgeTerm,EdgeTip  Direction is Node1-->Node2
+xjGenericGraph(InitialNodes,SixArgRelation,FourArgRelation,GlobalProperties,NodeTypeProperties,EdgeTypeProperties,GraphUI) :-
+	xjGenericGraph(InitialNodes,SixArgRelation,FourArgRelation,GlobalProperties,NodeTypeProperties,EdgeTypeProperties,GraphUI,_).
+
+xjGenericGraph(InitialNodes,SixArgRelation,FourArgRelation,GlobalProperties,NodeTypeProperties,EdgeTypeProperties,GraphUI,GUIW) :-
+	xjGenericGraphModel(InitialNodes,SixArgRelation,FourArgRelation,GlobalProperties,NodeTypeProperties,EdgeTypeProperties,GraphUI),
+	javaMessage('com.xsb.xj.XJDesktop',GUIW,testGUI(GraphUI)), 
+	(ipListenerWindow(LW) -> javaMessage(LW,addWindowsMenuTo(GUIW)) ; true).
+	
+xjGenericGraphModel(InitialNodes,SixArgRelation,FourArgRelation,GlobalProperties,NodeTypeProperties,EdgeTypeProperties,GraphUI) :-
+	functor(SixArgRelation,_,Six), Six >=6, functor(FourArgRelation,_,Four), Four >=4, 
+	is_list(GlobalProperties), is_list(NodeTypeProperties), is_list(EdgeTypeProperties), is_list(InitialNodes), 
+	( InitialNodes=[_|_] -> true ; writeln('fjGenericGraph: InitialNodes must not be empty'), fail),
+	\+ member((xjCollapsed = _),NodeTypeProperties),
+	xjCheckMinimalProps(NodeTypeProperties,[
+		operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick),
+		operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,lock(TM))),menu('Lock Node')),
+		operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,unlock(TM))),menu('Unlock Node')),
+		operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,removeNode(TM))),menu('Hide Node')),
+		operation(term(T,_P),writeln(id-T),menu('Print Node ID'))
+		],NodeTypeProperties2),
+	xjCheckMinimalProps(EdgeTypeProperties,[
+		operation(term(T,_P),writeln(id-T),menu('Show Edge ID'))
+		],EdgeTypeProperties2),
+	GT = gt('XJ$LAZY',[class='com.xsb.xj.XJGraph',
+	myGUI(Graph), root, 
+	operation(term(T,_P),javaMessage(Graph,setPickingMode),menu('Selection Mode')),
+	operation(term(T,_P),javaMessage(Graph,setTransformingMode),menu('Scroll Mode')),
+	operation(term(T,_P),javaMessage(Graph,expandAllVertices),menu('Expand More')),
+	operation(term(T,_P),javaMessage(Graph,expandAll),menu('Expand All')),
+	operation(term(_,_),javaMessage(Graph,collapseWeakComponents), menu('Collapse Weak Components')),
+	operation(term(T,_P),(javaMessage(Graph,collapseSelectedNodes)),menu('Collapse Selected Nodes')),
+	% operation(term(T,_P),writeln(double-Graph),doubleclick),
+	operation(term(T,_P),javaMessage(Graph,reapplyLayout),menu('Redraw Graph')),
+	operation(term(T,_P), 
+		(P=[_,Layout], javaMessage(Graph,applyLayout(string(Layout)))), 
+		menu(P,'Layouts'('frlayout2','daglayout','isomlayout','springlayout2','CircleLayout'))),
+	nodeTypes([xjCollapsed=[
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,uncollapse(TM))),menu('Uncollapse')),
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,uncollapse(TM))),doubleclick)] 
+			| NodeTypeProperties2]),
+	edgeTypes(EdgeTypeProperties2) | GlobalProperties],
+	lazy( SixArgRelation, FourArgRelation, [])
+	), createXJcomponent(GT,GraphUI), 
+	buildInitiallyFlatTermModel(InitialNodes,_INM), javaMessage(GraphUI,addNodes(_INM)).
+
+xjCollectAllGraphNodes(EdgeRelation,Nodes) :-
+	EdgeRelation =.. [_,Arg1,Arg2|Args],
+	setof(ID, (Arg1,Arg2,Args)^( EdgeRelation,(ID=Arg1;ID=Arg2)), Nodes).
+	
+% xjCheckMinimalProps(DeclaredTypes,MinimalProps,FinalTypes)
+xjCheckMinimalProps([],_MinimalProps,[]) :- !.
+xjCheckMinimalProps([Type=DeclaredProps|DT],MinimalProps,[Type=FinalProps|FT]) :-
+	merge(DeclaredProps,MinimalProps,FinalProps), xjCheckMinimalProps(DT,MinimalProps,FT).

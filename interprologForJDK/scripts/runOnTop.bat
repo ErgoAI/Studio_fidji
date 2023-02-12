@@ -1,0 +1,1 @@
+C:\Users\mc\XSB_AT_SVN\bin\xsb -e "[interprolog],  interprolog:spawn_java('ergo2java.jar'), interprolog:java('java.lang.System'-err,print(string('Hello from Java!')))."

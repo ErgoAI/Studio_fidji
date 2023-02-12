@@ -1,0 +1,21 @@
+@!{fam1}
+Family1 : Family[husband->Mike,
+ wife->Nancy,
+ son->{Jason, Noah}].
+@!{fam2}
+Family2 : Family[husband->Tim,
+ wife->Karen,
+ daughter->{Katherine,Caroline}].
+
+@!{son1} @{s1} ?f[child->?c] :- ?f[son->?c].
+@!{daughter1} @{d1} ?f[child->?c] :- ?f[daughter->?c].
+@!{husband_child1} @{hc1}
+?f[parent->?p] :- ?f[husband->?p,child->?c].
+@!{wife_child1} @{wc1}
+?f[parent->?p] :- ?f[wife->?p,child->?c].
+@!{father1} @{f1}
+?child[father->?father] :- ?family[husband->?father,child->?child].
+@!{grandfather1} @{gf1}
+?c[grandfather->?gf] :- ?f1[parent->?p,child->?c], ?f2[husband->?gf,child->?p].
+
+?- ?child[father->?father].

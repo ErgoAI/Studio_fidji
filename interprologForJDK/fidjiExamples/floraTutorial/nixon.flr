@@ -1,0 +1,11 @@
+:- use_argumentation_theory.
+
+@{rep}	\neg pacifist(?X) :- republican(?X).
+@{qua}	pacifist(?X) :- quaker(?X).
+@{pri1}	\overrides(rep, qua).
+@{fac1}	republican(nixon).
+@{fac2}	quaker(nixon).
+
+?- \neg pacifist(nixon).
+
+?- pacifist(nixon).

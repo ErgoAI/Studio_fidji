@@ -1,0 +1,1 @@
+java -Xmx1900M -jar ergoStudio.jar

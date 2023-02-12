@@ -1,0 +1,72 @@
+From a3fbd74dbfbe6377300fb486f2148fff0cbbea20 Mon Sep 17 00:00:00 2001
+From: Miguel Calejo <mc@declarativa.pt>
+Date: Tue, 5 May 2015 13:30:48 +0100
+Subject: [PATCH] Allow documents to have an initial (capacity) size, for
+ better memory and speed during large file loading
+
+---
+ .../java/org/fife/ui/rsyntaxtextarea/RSyntaxDocument.java    |  9 +++++++--
+ src/main/java/org/fife/ui/rtextarea/RDocument.java           | 12 ++++++++++--
+ 2 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/main/java/org/fife/ui/rsyntaxtextarea/RSyntaxDocument.java b/src/main/java/org/fife/ui/rsyntaxtextarea/RSyntaxDocument.java
+index 2ed7dfe..2185082 100644
+--- a/src/main/java/org/fife/ui/rsyntaxtextarea/RSyntaxDocument.java
++++ b/src/main/java/org/fife/ui/rsyntaxtextarea/RSyntaxDocument.java
+@@ -97,7 +97,10 @@ public class RSyntaxDocument extends RDocument implements Iterable<Token>,
+ 	public RSyntaxDocument(String syntaxStyle) {
+ 		this(null, syntaxStyle);
+ 	}
+-
++	
++	public RSyntaxDocument(TokenMakerFactory tmf, String syntaxStyle){
++		this(tmf,syntaxStyle,-1);
++	}
+ 
+ 	/**
+ 	 * Constructs a plain text document.  A default root element is created,
+@@ -106,8 +109,10 @@ public class RSyntaxDocument extends RDocument implements Iterable<Token>,
+ 	 * @param tmf The <code>TokenMakerFactory</code> for this document.  If
+ 	 *        this is <code>null</code>, a default factory is used.
+ 	 * @param syntaxStyle The syntax highlighting scheme to use.
++	 * @param initialBufferSize Initial buffer capacity, in chars. Ignored if <=0.
+ 	 */
+-	public RSyntaxDocument(TokenMakerFactory tmf, String syntaxStyle) {
++	public RSyntaxDocument(TokenMakerFactory tmf, String syntaxStyle, int initialBufferSize) {
++		super(initialBufferSize);
+ 		putProperty(tabSizeAttribute, Integer.valueOf(5));
+ 		lastTokensOnLines = new DynamicIntArray(400);
+ 		lastTokensOnLines.add(Token.NULL); // Initial (empty) line.
+diff --git a/src/main/java/org/fife/ui/rtextarea/RDocument.java b/src/main/java/org/fife/ui/rtextarea/RDocument.java
+index 3b61b00..1b38e69 100644
+--- a/src/main/java/org/fife/ui/rtextarea/RDocument.java
++++ b/src/main/java/org/fife/ui/rtextarea/RDocument.java
+@@ -26,7 +26,11 @@ public class RDocument extends PlainDocument {
+ 	 * Constructor.
+ 	 */
+ 	public RDocument() {
+-		super(new RGapContent());
++		this(-1);
++	}
++
++	public RDocument(int initialBufferSize) {
++		super(new RGapContent(initialBufferSize));
+ 	}
+ 
+ 
+@@ -46,7 +50,11 @@ public class RDocument extends PlainDocument {
+ 	 * Document content that provides fast access to individual characters.
+ 	 */
+ 	private static class RGapContent extends GapContent {
+-
++	
++		public RGapContent(int initialLength){
++			super((initialLength>0?initialLength:10)); // default has in the superclass
++		}
++		
+ 		public char charAt(int offset) throws BadLocationException {
+ 			if (offset<0 || offset>=length()) {
+ 				throw new BadLocationException("Invalid offset", offset);
+-- 
+2.2.1
+

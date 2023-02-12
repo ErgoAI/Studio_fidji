@@ -1,0 +1,57 @@
+/*
+Copyright Miguel Calejo 2013. 
+
+fj_flora2prologTerm('[n(''Coherent'')]',IDs),
+GT = gt('XJ$LAZY',[class='com.xsb.xj.XJGraph', layout=isomLayout, undirected, labelsInNodes, cubicCurve, 
+	myGUI(Graph), root, 
+	operation(term(T,_P),javaMessage(Graph,setPickingMode),menu('Pick Mode')),
+	operation(term(T,_P),javaMessage(Graph,setTransformingMode),menu('Scroll Mode')),
+	operation(term(T,_P),javaMessage(Graph,expandAllVertices),menu('Expand More')),
+	operation(term(T,_P),javaMessage(Graph,expandAll),menu('Expand All')),
+	operation(term(T,_P),javaMessage(Graph,reapplyLayout),menu('Rearrange')),
+	operation(term(T,_P),writeln(double-Graph),doubleclick),
+	operation(term(T,_P), 
+		(P=[_,Layout], javaMessage(Graph,applyLayout(string(Layout)))), 
+		menu(P,'Layouts'('frlayout2','daglayout','isomlayout','springlayout2'))
+	),
+	nodeTypes([ 
+		normal=[
+			operation(term(T,_), flora('writeln(''I obbey!'' - ?T)@_plg.',['?T'=T]), menu('Flora command')),
+			operation(term(T,_P),(buildTermModel(T,TM),javaMessage(Graph,expandVertex(TM))),doubleclick)] ]),
+	edgeTypes([
+		'Owner'=[color=red,operation(term(T,P),writeln(id-T/P),menu('Show ID'))], 
+		'Partner'=[color=green, dashed], 
+		'Employee'=[color=blue, doted]
+	])],
+	lazy( 
+		flora('related(?NodeID1,?NodeID2,?EdgeID,?EdgeType,?EdgeTerm,?EdgeTip).', ['?NodeID1'=_,'?NodeID2'=_,'?EdgeID'=_,'?EdgeType'=_,'?EdgeTerm'=_,'?EdgeTip'=_]),
+		flora('entity(?NodeID,?NodeType,?NodeTerm,?NodeTip).', ['?NodeID'=_,'?NodeType'=_,'?NodeTerm'=_,'?NodeTip'=_]),
+		IDs)  % Initial node IDs, Prolog form; if using Flora relations, make sure to translate Flora terms first as above with fj_flora2prologTerm/2
+	), createXJcomponent(GT,GUI), javaMessage('com.xsb.xj.XJDesktop',testGUI(GUI)).
+
+*/
+
+
+/*
+entity(?N,normal,?N,null). 
+related(?N1,?N2,?N1-?N2,?Type,?Type,'Type of involvement') :- related(?N1,?N2,?Type).
+*/
+entity(n(?N),normal,?N,null).
+related(n(?N1),n(?N2),?N1-?N2,?Type,?Type,'Type of involvement') :- related(?N1,?N2,?Type).
+
+
+related('Miguel','Declarativa','Owner').
+related('Miguel','RentingPoint','Partner').
+related('Miguel','Coherent','Partner').
+related('Paul','Coherent','Partner').
+related('Paul','Automata','Owner').
+related('Benjamin','Coherent','Partner').
+related('Benjamin','BG Associates','Owner').
+related('Janine','Coherent','Partner').
+related('Terry','Coherent','Partner').
+related('Michael','Coherent','Partner').
+related('Michael','SUNYSB','Employee').
+related('Paulo','Coherent','Partner').
+related('Paulo','SUNYSB','Employee'). 
+
+

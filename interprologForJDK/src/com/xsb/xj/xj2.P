@@ -1,0 +1,1280 @@
+:- document_export 
+            addToAllNodes/3,
+            containsProperty/2,
+	countSolutions/2,
+	countSolutions/3,
+	countUniqueSolutions/2,
+            createTermGui/3, createTermGUIFromGT/3, createTermSetGUI/5, 
+	createXJcomponent/3,
+	editNewTerm/3,
+	editTermSet/4, editTerm/2, editTerm/3,
+	find_child_index/5,
+	get_cached_solution_models/7,
+	get_sorted_solution_models/4,
+	get_sorted_solution_models/6, get_solution_models/5, get_solutionN/3,
+	getSort/3,
+	guiConfirmOperation/1,
+	get_sort_term/3,
+	getSubtree/3,
+	getTreeLabels/4,
+	isBTMvar/1,
+	goal_arg/3,
+	removeTreeLabelCache/3,
+	selectXJComponent/1, 	selectXJComponent/2,
+	setSort/3, setSort/2,
+	testXJComponent/1,
+	xjSubtermGoal/2,
+	xj_assert/1,
+	xjCallQuick/2,xjCallIfQuick/3, xjCallIfQuick/2,
+	xjCancellableProgress/1,
+	xjDeleteTerms/1,
+	xj_discoverTreeRoot/5,	xj_discoverTreeRoot/2,
+	xj_failError/1,
+	xj_failError/2,
+	xj_fetchError/1,
+	xj_if_predicate_defined/1,
+	xjInsertTerms/1,
+	xjLogWriter/5, xjLogWriter_start/1, xjLogWriter_stop/1,
+	xjRememberPrologAction/1,
+	xjCollectMenuOperations/2,
+	xj_retract/1,
+	xj_retractall/1,
+	xj_asserta/1,
+	xjSetProgress/1, xjEndProgress/0,
+	xjShowProgress/0, xjShowProgress/1,
+	xjShowProgress/2, xjShowProgress/3,
+	xjShowProgress/4,
+	xjLazyFloraGoal/5,
+	xjLazyFloraGoal/6,
+	xjLazyFloraGoal/8,
+	xjLazyFloraGoalGrounding/4,
+	xjMergeProperties/3,
+	addToAllNodesExceptTop/3,
+	xjEnableActionsOf/1,
+	xjSaveTerm/3, xjValidate/1, xjValidateInput/1,
+	xjWaitForSwing/0.
+
+%% these probably are deletable
+:- document_export 
+	gtTermMatch/2,
+	sublist/2.
+
+/*
+:- export 
+	addToAllNodes/3,
+	containsProperty/2,
+	countSolutions/2,
+	countUniqueSolutions/2,
+	createTermGui/3, createTermGUIFromGT/3, createTermSetGUI/5, 
+	createXJcomponent/3,
+	editNewTerm/3,
+	editTermSet/4, editTerm/2, editTerm/3,
+	find_child_index/5,
+	get_cached_solution_models/7,
+	get_sorted_solution_models/4,
+	get_sorted_solution_models/6,
+	get_solution_models/5,
+	get_solutionN/3,
+	getSort/3,
+	guiConfirmOperation/1,
+	get_sort_term/3,
+	getSubtree/3,
+	getTreeLabels/4,
+	isBTMvar/1,
+	removeTreeLabelCache/3,
+	selectXJComponent/1,
+	selectXJComponent/2,
+	setSort/3, setSort/2,
+	testXJComponent/1,
+	xj_assert/1,
+	xjCallQuick/2,xjCallIfQuick/3,
+	xjCallIfQuick/2,
+	xjCancellableProgress/1,
+	xjDeleteTerms/1,
+	xj_discoverTreeRoot/5,
+	xj_discoverTreeRoot/2,
+	xj_failError/1,
+	xj_failError/2,
+	xj_fetchError/1,
+	xj_if_predicate_defined/1,
+	xjInsertTerms/1,
+	xjLogWriter/5,
+	xjLogWriter_start/1,
+	xjLogWriter_stop/1,
+	xjRememberPrologAction/1,
+	xjCollectMenuOperations/2,
+	xj_retract/1,
+	xj_retractall/1,
+	xjSetProgress/1,
+	xjEndProgress/0,
+	xjShowProgress/0,
+	xjShowProgress/1,
+	xjShowProgress/2,
+	xjShowProgress/3,
+	xjShowProgress/4,
+	xjLazyFloraGoal/5,
+	xjLazyFloraGoal/6,
+	xjLazyFloraGoal/8,
+	xjLazyFloraGoalGrounding/4,
+	xjMergeProperties/3,
+	xjSaveTerm/3,
+	xjValidate/1,
+	xjValidateInput/1.
+*/
+
+
+:- import select/3, append/3, member/2, memberchk/2, length/2 from basics.
+:- import merge/3 from listutil.
+:- import term_to_atom/2, concat_atom/2 from string.
+:- import fmt_write_string/3 from file_io.
+:- import term_new_mod/3 from machine.
+:- import numbervars/4 from num_vars.
+
+:- import cache_range/5, cache_index/4, just_notify/2, nocache_but_notify/2 from prologCache.
+
+:- import buildTermModel/2, buildTermModel_/2, buildTermModels/2, buildTermModelList_/2, 
+	ip_inc_var_counter/1, ipIsObjectReference/1, ipObjectSpec/3, ipObjectSpec/4, ipPrologEngine/1,
+	javaMessage/2, javaMessage/3, javaMessage/4, java/2,
+	recoverTermModel/2, recoverTermModelArray/2, fj_flora_query/5,
+	create_counter/1, get_increment_counter/2  from interprolog.
+
+% :- document_import log_level/4, log_get_timestamp/1, default_log_writer/5 from xsb_logger.
+
+% :- document_import guiTerm/4, guiTermSet/5, guiPredicateLabels/2, xj_interestingFailure/1, xjDesktop/1  from usermod.
+
+:- dynamic xj_dependence/3.
+
+%%% Higher level primitives
+
+% createTermSetGUI(+Pred/Arity,+Type,+ContextDescription,+Context,-GUI)
+createTermSetGUI(P,Type,CD,C,GUI) :- 
+   guiTermSetMatch(P,Type,CD,C,GT), createXJcomponent(GT,GUI).
+   
+% createTermGUI(+Term,+ContextDescription,-GUI) 
+createTermGUI(T,ContextD,GUI) :- 
+   guiTermMatch(T,_Type,ContextD,GT),
+%%   writeln(gt-GT),
+   createXJcomponent(GT,GUI).
+
+createTermGUIFromGT(T,GT,GUI) :-
+	createTermGUIFromGT(T,null, GT,GUI).
+
+createTermGUIFromGT(T,ContextDescription,GT,GUI) :- 
+	guiTermMatch2(T, ContextDescription,GT,GT1),
+	createXJcomponent(GT1,GUI).
+   
+% createNewTermGUI(+Pred/Arity,+Type,+ContextDescription,-GUI)
+createNewTermGUI(P,Type,CD,GUI) :-
+	guiTermNew(P,Type,CD,GT),
+	createXJcomponent(GT,GUI).
+
+% createXJcomponent(GT,GUI)
+% 
+createXJcomponent(GT,GUI) :-
+   ipPrologEngine(E),
+   buildGUITerm(GT,GTM),
+   % javaMessage_throws(GTM,GUI,makeGUI(E)), % throw a Prolog exception if we get one from Java
+   % the above is causing a 'Too many registers required; see assert/3 for large terms'...need more time to debug
+   % javaMessage(GTM,GUI,makeGUI(E)), 
+   javaMessage(GTM,Exception,GUI,makeGUI(E)),
+   (Exception == null -> true; xj_failError(Exception)),
+   GUI \== null,
+   keepLazyDependenciesTop(GT,GUI).
+
+%%createXJcomponent(Gt,VarList,GUI)
+createXJcomponent(GT,Vars,GUI) :-
+   ipPrologEngine(E),
+   buildGUITerm(GT,Vars, GTM, NewVars),
+   buildTermModel(NewVars,Model),
+   javaMessage(GTM,TM,makeGUI(E, Model)),
+   GUI \== null,
+   recoverTermModel(TM, T),
+   T = ''(GUI, RefList),
+   RefList = Vars,
+   keepLazyDependenciesTop(GT,GUI).
+   
+% editXJComponent(+GUI) Inserts it into a default visual hierarchy
+editXJComponent(GUI) :-
+   xjDesktop(Desktop),
+   javaMessage(Desktop,F,createTermForm(GUI)),
+   F \== null.
+
+testXJComponent(GUI) :- javaMessage('com.xsb.xj.XJDesktop',testGUI(GUI)).
+
+% selectXJComponent(+GUI,+Parts)
+selectXJComponent(GUI,Parts) :- 
+   preprocessPart(Parts,PartObject),
+   ipObjectSpec('ArrayOfObject',PartObject,ArrayObject), javaMessage(GUI,selectGUI(ArrayObject)).
+
+selectXJComponent(GUI) :- javaMessage(GUI,selectGUI(null)).
+
+preprocessPart(Part,[Part]) :- ipIsObjectReference(Part), !. % A LazyTreeNode ??? no
+preprocessPart(Parts,Parts2) :- is_list(Parts), !, buildTermModels(Parts,Parts2).
+preprocessPart(Part,[PartObject]) :-   buildTermModel(Part,PartObject). 
+   % container path, list item indexes or tree NodeIDs
+
+
+% editTermSet(+Pred/Arity,+Type,+ContextDescription,+Context)
+editTermSet(P,Type,ContextDescription,Context) :-
+   createTermSetGUI(P,Type,ContextDescription,Context,GUI),
+   editXJComponent(GUI).
+
+% editTerm(+Term,+ContextDescription) Assumes Term to be a tuple
+editTerm(Term,ContextDescription) :-
+   createTermGUI(Term,ContextDescription,GUI) ,
+   editXJComponent(GUI).
+   
+editTerm(Term,ContextDescription,GT) :-
+	createTermGUIFromGT(Term,ContextDescription,GT,GUI) ,
+	editXJComponent(GUI).
+
+% editNewTerm(+Pred/Arity,+Type,+ContextDescription)
+editNewTerm(P,Type,CD) :-
+	createNewTermGUI(P,Type,CD,GUI),
+	editXJComponent(GUI).
+
+%-Progress Dialogs----------------------------------------------------
+
+:- comment(xjShowProgress/0,"Uses the action description for title. Assumes task
+length of 0 and that the action closes the dialog.").
+
+xjShowProgress :- xjShowProgress(null,_Title,0,1).
+
+:- comment(xjShowProgress/1,"Assumes task length of 0 and that the action closes
+the dialog. (+Title) ").
+
+xjShowProgress(Title) :- xjShowProgress(null,Title,0,1).
+
+:- comment(xjShowProgress/2,"Assumes that the action closes the dialog. Length
+must be an integer. (+Title, +Length) ").
+
+xjShowProgress(Title,Length) :- xjShowProgress(null,Title,Length,1).
+
+:- comment(xjShowProgress/3,"This predicate has been deprecated use 
+xjShowProgress/4. (?Title, +Length, +ActionClosesDialog{0|1} )").
+xjShowProgress(Title, Length, ActionClosesDialog) :-
+   xjShowProgress(null, Title, Length, ActionClosesDialog).
+
+:- comment(xjShowProgress/4,"Length must be an integer. If ActionClosesDialog = 1,
+then the dialog disappears once the prolog predicate has finished executing. 
+(?Owner, ?Title, +Length, +ActionClosesDialog{0,1} ) ").
+
+:- dynamic  xpGlobalProgressController/1.
+ 
+xjShowProgress(Owner,Title,Length,ActionClosesDialog) :-
+   integer(Length),
+   (ActionClosesDialog==1;ActionClosesDialog==0),
+   (xjCurrentPrologAction(A) ->
+      (ActionClosesDialog==1 -> javaMessage(A,ownsProgressDialog); true),
+      (var(Title)->javaMessage(A,string(Title),getDescription);true)
+   ;true),
+   xpGlobalProgressController(E), ipObjectSpec(int,L,[Length],_),
+   javaMessage(E,showProgress(Owner,string(Title),L)).
+
+:- comment(xjSetProgress/1,"Updates the progress in the current thread
+of xjShowProgress. N must be an integer less than the lenght of the
+task. (+N)").  
+
+xjSetProgress(N) :- 
+	integer(N),
+	xpGlobalProgressController(E),ipObjectSpec(int,L,[N],_),
+	javaMessage(E,setProgress(L)).
+
+:- comment(xjEndProgress/0,"Must be called to close progress window if no prolog
+predicate owns the progress thread.").
+
+xjEndProgress :- 
+   xpGlobalProgressController(E), javaMessage(E,endProgress).
+
+:- comment(xjCancellableProgress/1,"Enables/Disables the cancel button on the 
+current progress dialog. (+Yes {1,0}) ").
+
+xjCancellableProgress(Yes) :- 
+   (Yes==1;Yes==0), !, 
+   xpGlobalProgressController(E),ipObjectSpec(boolean,L,[Yes],_),
+   javaMessage(E,setCancellableProgress(L)).
+
+%----------------------------------------------------------------------
+
+%%% Persistence
+% We may (or not) need to pass the GUI object here to avoid duplicate refreshing!!!
+xjSaveTerm(OldTM,NewTM,IsNewObj) :- 
+   %ipObjectSpec('InvisibleObject',GUI,[GUI_ID],_),
+   recoverTermModel(NewTM,NewTerm), ipObjectSpec('java.lang.Boolean',IsNewObj,[IsNew],_),
+   (IsNew=1 -> xj_insert(NewTerm) ; recoverTermModel(OldTM,OldTerm), xj_update(OldTerm,NewTerm)).
+
+
+xjInsertTerms(TermArray) :- recoverTermModelArray(TermArray,Terms), xjInsertTerms2(Terms).
+
+xjInsertTerms2([]) :- !.
+xjInsertTerms2([T1|Tn]) :- xj_insert(T1), xjInsertTerms2(Tn).
+
+xjDeleteTerms(TermArray) :- recoverTermModelArray(TermArray,Terms), xjDeleteTerms2(Terms).
+
+xjDeleteTerms2([]) :- !.
+xjDeleteTerms2([T1|Tn]) :- xj_delete(T1), xjDeleteTerms2(Tn).
+
+
+xjDeleteTerm(OldTM) :-  recoverTermModel(OldTM,OldTerm), xj_delete(OldTerm).
+
+% reusing the PrologAction machinery:
+:- multifile guiConfirmOperation/1.
+
+guiConfirmOperation(xjDeleteTerm(_OldTM)).
+
+% this will contain a single tuple referring the currently (or last) executing PrologAction
+:- dynamic xjCurrentPrologAction/1.
+xjRememberPrologAction(Ref) :-
+   retractall(xjCurrentPrologAction(_)), assert(xjCurrentPrologAction(Ref)).
+
+xj_insert(New) :-
+	xj_module_term(New,Mod,T),
+	xj_insertFunctor(T,F),
+	T=..[_|Args],
+	G=..[F|Args],
+	(Mod = usermod -> G ; term_new_mod(Mod, G, ModG), ModG).
+xj_update(Old,New) :-
+   xj_module_term(Old,Mod,OldTerm),
+   xj_module_term(New,Mod,NewTerm),
+   xj_updateFunctor(OldTerm,F),
+   OldTerm =.. [P|OldArgs],
+   NewTerm =.. [P|NewArgs], 
+   append(OldArgs,NewArgs,Args), G=..[F|Args],
+   (Mod = usermod -> G ; term_new_mod(Mod, G, ModG), ModG).
+xj_delete(Term) :-
+	xj_module_term(Term,Mod,T),
+	xj_deleteFunctor(T,F),
+	T=..[_|Args],
+	G=..[F|Args],
+	(Mod = usermod -> G ; term_new_mod(Mod, G, ModG), ModG).
+
+xj_module_term(Mod:Term,Mod,Term):- !.
+xj_module_term(Term,usermod,Term).
+
+% These should be used by implementations of xj_insert_P, etc.
+xj_assert(T) :- assertz(T).
+xj_asserta(T) :- asserta(T).
+xj_retract(T) :- retract(T).
+xj_retractall(T) :- retract(T).
+
+xjValidateInput(TermModel):- recoverTermModel(TermModel,Term), xj_validateFunctor(Term,F), Term=..[_|Args], Goal=..[F|Args], Goal.
+
+xj_validateFunctor(T,F) :- atom(T), !, appendchars(xj_validate_,T,F).
+xj_validateFunctor(T,F) :- functor(T,FF,_), appendchars(xj_validate_,FF,F).
+
+%%% GT processing
+
+% guiTermSetMatch(+Pred/Arity,?Type,?ContextDescription,?Context,?GT)
+guiTermSetMatch(F/N,Type,CD,C,GT) :- 
+   guiTermSet(F/N,Type,CD,C,GT1),
+   addProperty(GT1,typename=Type,GT2),
+   processPersistencyLazy(GT2,GT).
+
+% guiTermMatch(+T,?Type,?ContextD,?GT)
+guiTermMatch(T,Type,ContextD,GT) :- 
+	nonvar(T),
+	(T = Mod:Term
+	 ->	functor(Term,F,N),
+		term_new_mod(Mod,guiTerm(F/N,Type,ContextD,GT2),GtGoal),
+		call(GtGoal),
+		guiTermMatch2(Term,Type,GT2,GT3), GT=Mod:GT3
+	 ;	functor(T,F,N),
+		guiTerm(F/N,Type,ContextD,GT2),
+		guiTermMatch2(T,Type,GT2,GT)
+	).
+
+guiTermMatch2(T,Type,GT2,GT) :- 
+%%	annotateTerm(T,GT1),
+	gtTermMatch(T,GT2),
+%%	remove_annotations_opaque(GT2,GT2_0),
+	validProperties(GT2),
+	processPersistencyLazy(GT2,GT3),
+	addProperty(GT3,typename=Type,GT4),
+	topAnnotateWithNames(GT4,GT).
+
+% guiTermNew(+Pred/Arity,+Type,+ContextDescription,?GT)
+guiTermNew(P,Type,CD,GT) :-
+	(P = Mod:P1
+	 ->	term_new_mod(Mod,guiTerm(P1,Type,CD,GT1),GtGoal),
+		call(GtGoal)
+	 ;	guiTerm(P,Type,CD,GT1)
+	),
+   processPersistencyLazy(GT1,GT2),
+   addProperty(GT2,typename=Type,GT3),
+   topAnnotateWithNames(GT3,GT4),
+   addProperty(GT4,isNewTerm,GT5),
+   (var(Mod) -> GT = GT5 ; GT = Mod:GT5).
+
+keepLazyDependenciesTop(_Mod:Gt,Gui):- !,
+	keepLazyDependencies(Gt,Gui).
+keepLazyDependenciesTop(Gt,Gui):- 
+	keepLazyDependencies(Gt,Gui).
+
+% keepLazyDependencies(+GT,+GUI)
+% asserts xj_dependence/3 facts for each lazy sub term
+keepLazyDependencies(GT,_) :- var(GT), !, fail.
+keepLazyDependencies(gt(_,Props,_),_) :- member(opaque,Props), !.
+keepLazyDependencies(gt(N,Props,C),GUI) :- member(nonpersistent,Props), !,
+	(N == '.',
+	 (memberchk(list(_GT),Props) ; memberchk(lazytree(_),Props)) % if nonpersistent list/combo/lazytree with selections
+	 ->	true %  children are not GTs but list elements
+	 ;	keepLazyDependencies(C,GUI)
+	).
+keepLazyDependencies(gt(N,Props,_C),_) :- N == '.',member(list(_GT),Props),!.
+keepLazyDependencies(gt(N,Props,_C),_) :- N == '.',member(lazytree(_GT),Props). %% lazy tree with eager selections
+keepLazyDependencies(gt(Node,Props,_),GUI) :- Node == 'XJ$LAZY', !,
+   (lazyTemplate(Props,Templates) -> keepLazyDependencies2(Templates,GUI) ; true /* To cater for eager graphs */).
+keepLazyDependencies([],_) :- !.
+keepLazyDependencies([C1|Cn],GUI) :- !, 
+   keepLazyDependencies(C1,GUI), keepLazyDependencies(Cn,GUI).
+keepLazyDependencies(gt(_,_,C),GUI) :- keepLazyDependencies(C,GUI).
+
+% keepLazyDependencies2(+Templates) 
+keepLazyDependencies2(gt(_,TP,_),GUI) :- !, % lists or mono-typed trees
+   (  member(dependsOn=Pred/Arity,TP) -> 
+      check_asserted(xj_dependence(Pred,Arity,GUI)) 
+      ; true).
+% polimorphic trees:
+keepLazyDependencies2([GT1|GTn],GUI) :- !,
+   keepLazyDependencies2(GT1,GUI), keepLazyDependencies2(GTn,GUI).
+keepLazyDependencies2([],_).
+
+% processPersistencyLazy(+GT1,-GT2) 
+% adds insertable, updatable, deletable, checkable, dependsOn
+% rewrites lazy/1 -> lazy/2
+processPersistencyLazy(GT1,GT2) :- var(GT1), !, GT1=GT2.
+processPersistencyLazy(gt(N,Props,C),GT2) :- member(opaque,Props), !, 
+   GT2=gt(N,Props,C).
+processPersistencyLazy(gt(N,Props,C),GT2) :- member(nonpersistent,Props), !,
+	(N == '.',
+	 (memberchk(list(_GT),Props) ; memberchk(lazytree(_),Props)) % if nonpersistent list/combo/lazytree with selections
+	 ->	GT2=gt(N,Props,C) %  children are not GTs but list elements
+	 ;	processPersistencyLazy(C,NC), GT2=gt(N,Props,NC)
+	).
+processPersistencyLazy(gt(Node,Props,L),GT2) :- Node == '.', member(list(_GT),Props), !, 
+   GT2=gt(Node,Props,L).   
+processPersistencyLazy(gt(N,P1,Lazy1),GT2) :- N == '.', select(lazytree(GT),P1,P2), !,  %% for lazy trees with eager selections
+   processPersistencyLazy(GT,NGT),
+   (select(lazy(ScG,CG),P2,P3) %% lazy term might instead be specified in properties
+    ->	   Lazy=lazy(ScG,CG,_)
+    ;	   select(lazy(ScG,CG,C),P2,P3),
+	   Lazy=lazy(ScG,CG,C)
+   ),
+   GT2 = gt(N,[lazytree(NGT),Lazy|P3],Lazy1).
+processPersistencyLazy(gt(N,P1,Lazy1),GT2) :- N == 'XJ$LAZY', select(lazylist(GT),P1,P2), !, 
+   processPersistencyLazy(GT,NGT),
+   lazyListGoals(Lazy1,Lazy),
+   GT2 = gt(N,[lazylist(NGT)|P2],Lazy).
+processPersistencyLazy(gt(N,P1,Lazy1),GT2) :- N == 'XJ$LAZY', select(lazytree(GT),P1,P2), !, 
+   processPersistencyLazy(GT,NGT),
+   lazyTreeGoals(Lazy1,Lazy),
+   GT2 = gt(N,[lazytree(NGT)|P2],Lazy).
+
+processPersistencyLazy([],C) :- !, C=[].
+processPersistencyLazy([GT|C],L) :- !, 
+   processPersistencyLazy(GT,NGT), 
+   processPersistencyLazy(C,NC),
+   L=[NGT|NC].
+processPersistencyLazy(gt(Node,Props,C), gt(Node,Props,NC)) :- var(Node), !,
+   processPersistencyLazy(C,NC).
+processPersistencyLazy(gt(Node,Props,C), gt(Node,NewProps,NC)) :- 
+   realGTArity(C,0,N),
+   findPersistencyProps(Node,N,PP),
+   % If changes may occur on this, make it depend on the Prolog predicate
+   (PP=[] -> NewProps=Props ; append([(dependsOn=Node/N)|PP],Props,NewProps)),
+   processPersistencyLazy(C,NC).
+
+lazyListGoals(lazy(G),lazy(G,G,_)).
+lazyListGoals(lazy(T,G),lazy(T,G,_)).
+lazyListGoals(lazy(T,G,C),lazy(T,G,C)).
+
+%lazyTreeGoals(lazy(G),lazy(G,_)).
+lazyTreeGoals(lazy(ScG,CG),lazy(ScG,CG,_)).
+lazyTreeGoals(lazy(ScG,CG,C),lazy(ScG,CG,C)).
+
+% findPersistencyProps(+Pred,+Arity,-PropList)
+findPersistencyProps(F,_,[]) :- number(F), !.
+findPersistencyProps(F,N,Props) :- 
+   xj_insertFunctor(F,IF),
+   xj_updateFunctor(F,UF),
+   xj_deleteFunctor(F,DF), 
+   CN is N*2,
+   (current_predicate(IF/N) -> Insertable=[insertable] ; Insertable=[]),
+   (current_predicate(UF/CN) -> Updatable=[updatable] ; Updatable=[]),
+   (current_predicate(DF/N) -> Deletable=[deletable] ; Deletable=[]),
+   append(Insertable,Updatable,L1), 
+   append(L1,Deletable,Props).
+
+xj_insertFunctor(T,F) :- atom(T), !, appendchars(xj_insert_,T,F).
+xj_insertFunctor(T,F) :- functor(T,FF,_), appendchars(xj_insert_,FF,F).
+
+xj_updateFunctor(T,F) :- atom(T), !, appendchars(xj_update_,T,F).
+xj_updateFunctor(T,F) :- functor(T,FF,_), appendchars(xj_update_,FF,F).
+
+xj_deleteFunctor(T,F) :- atom(T), !, appendchars(xj_delete_,T,F).
+xj_deleteFunctor(T,F) :- functor(T,FF,_), appendchars(xj_delete_,FF,F).
+
+
+% appendchars(+A,+B,-AB)
+appendchars(A,B,AB) :- 
+   atom_codes(A,ListA), atom_codes(B,ListB), 
+   append(ListA,ListB,List), atom_codes(AB,List).
+
+% gtTermMatch(+Source,?Destination)  
+% "matches" Term to GTs, skipping lazy and nonpersistent nodes in Destination
+% Sourcedoes not contain 'nonpersistent' or lazy nodes
+% destination is assumed to have a non-lazy and non-nonpersistent top node
+
+gtTermMatch(S,D) :-
+	removeGTExtras([S],[D],[],[]), !.
+
+% removeGTExtras(+Term, +FullyAnnotatedGT, -UnprocessedTermRemainder, -UnprocessedGt)
+removeGTExtras(Term, gt(Node,Props,Children),[],[]) :-
+	member(opaque,Props), !,
+	(var(Term)
+	 ->	(var(Node) -> Children = [], Node = Term ; is_list(Children), Term =.. [Node | Children])
+	 ;	Term =.. [Node | Children]
+	).
+removeGTExtras(Term, gt(Node,Props,C), [Term], RemGt) :-
+	member(nonpersistent,Props), !,
+	(Node == '.',
+	 (memberchk(list(_),Props) ; memberchk(lazytree(_),Props)) % if nonpersistent list/combo/lazytree with selections
+	 ->	RemGt = [] %  children are not GTs but list elements
+	 ;	RemGt = C % propagate children GTs up
+	).
+removeGTExtras(Term, gt(Node,_,_), [Term],[]) :- Node == 'XJ$LAZY', !.
+removeGTExtras(Term, gt(Node1,_,L1), [], []) :- Node1 == '.', !, %% for lists and trees with eager selections
+   (var(Term) -> L1 = Term /* or  L1 = [] ?*/ ; is_list(Term), L1 = Term).
+removeGTExtras(Term, gt(Term,_,[]), [], []) :- (atomic(Term) ; var(Term)), !.
+removeGTExtras(Term, gt(SN,_,DC), Rem, []) :-
+	var(Term), !,
+	removeGTExtras(SC,DC, Rem, []),
+	Term =.. [SN|SC].
+removeGTExtras(Term, gt(SN,_,DC), Rem, []) :-
+	 Term =.. [SN|SC],
+	 removeGTExtras(SC,DC, Rem, []).
+
+removeGTExtras([],[],[],[]) :- !.
+removeGTExtras(H, [GT|C], [], []) :-
+   (var(H) ; H == []), !,
+   removeGTExtras(X, GT, Rem, RemGt),
+   (Rem = [X], var(X) % GT is nonpersistent
+    ->	   H = More % works for empty list also
+    ;	   H = [X|LeanList],
+	   append(Rem, LeanList, More)
+   ), 
+   append(RemGt, C, CGt),
+   removeGTExtras(More,CGt, [], []).
+removeGTExtras([H|LeanList], [GT|C], [], []) :- 
+   removeGTExtras(H, GT, Rem, RemGt),
+   append(Rem, LeanList, More),
+   append(RemGt, C, CGt),
+   removeGTExtras(More,CGt, [], []).
+
+% realGTArity(+Children,+Initial,-Finalcount) 
+% counts children, ignoring lazy ones and nonpersistent ones (and diving over these)
+realGTArity([],N,N) :- !.
+realGTArity([gt(Node,_,_)|C],N1,Nn) :- Node == 'XJ$LAZY', !, realGTArity(C,N1,Nn).
+realGTArity([gt(_,P1,C1)|Children],N1,Nn) :- member(nonpersistent,P1), !,
+    realGTArity(C1,N1,N2), realGTArity(Children,N2,Nn).
+realGTArity([_|Children],N1,Nn) :- N is N1+1, realGTArity(Children,N,Nn).
+
+
+% validProperties(+GT)  succeeds if the GT nodes and shape are coherent with property semantics
+validProperties(GT) :- var(GT), !.
+validProperties(gt(_,Props,_)) :- member(opaque,Props), !.
+validProperties(gt(Node,Props,L)) :- Node == '.', member(list(GT),Props), !, 
+   noAtomicProperties(Props),
+   validListProperties(L,GT). % we will do some checking 
+validProperties(gt(Node,Props,_L)) :- Node == '.', member(lazytree(GT),Props), !, %% for lazy trees with eager selections
+   noAtomicProperties(Props),
+   validProperties(GT). 
+validProperties(gt(Node,Props,Lazy)) :- Node == 'XJ$LAZY', member(lazylist(GT),Props), !, 
+   noAtomicProperties(Props), functor(Lazy,lazy,_),
+   validProperties(GT). % do not check lazy structure itself
+validProperties(gt(Node,Props,Lazy)) :- Node == 'XJ$LAZY', member(lazytree(GT),Props), !, 
+   noAtomicProperties(Props), functor(Lazy,lazy,_),
+   validProperties(GT). % do not check lazy structure itself
+validProperties(gt(Node,Props,Children)) :- 
+   validProperties(Props,Node), validProperties(Children).
+validProperties([]) :- !.
+validProperties([C1|Cn]) :- validProperties(C1), validProperties(Cn).
+
+% validProperties(Props,NodeValue)
+validProperties(Props,NodeValue) :- validProperties(Props,Props,NodeValue).
+
+% validProperties(Props,AllProps,NodeValue)
+validProperties([],_,_) :- !.
+validProperties([P1|Pn],All,Node) :- not incompatibleProperty(P1,All,Node), validProperties(Pn,All,Node).
+
+
+validListProperties(L,_GT) :- var(L), !. % do not complain about a free list
+validListProperties([],_GT) :- !.
+validListProperties(L,GT) :- 
+   % Assume that if any list element complies the others do too:
+   not not (member(T,L), /* annotateTerm(T,GT1), */ gtTermMatch(T,GT), validProperties(GT)).
+   % tollerates extra nonpersistent nodes within
+
+% noAtomicProperties(+Props)  fails if Props contains a prop unnaceptable in the root of a list/tree GT
+noAtomicProperties(Props) :- member(atom,Props), !, fail.
+noAtomicProperties(Props) :- member(atomUPPER,Props), !, fail.
+noAtomicProperties(Props) :- member(number,Props), !, fail.
+noAtomicProperties(Props) :- member(integer,Props), !, fail.
+noAtomicProperties(Props) :- member(constant,Props), !, fail.
+noAtomicProperties(Props) :- member(nullable,Props), !, fail.
+noAtomicProperties(_Props).
+
+% incompatibleProperty(+Property,+AllProperties,+NodeValue) Should not bind NodeValue
+incompatibleProperty(atom,_,X) :- !, number(X).
+incompatibleProperty(atomUPPER,All,X) :- !, nonvar(X), not upperATOM(X), not (X=null,member(nullable,All)).
+incompatibleProperty(number,All,X) :- !, atom(X), not (X=null,member(nullable,All)).
+incompatibleProperty(integer,All,X) :- !, atom(X), not (X=null,member(nullable,All)).
+incompatibleProperty(float,All,X) :- !, atom(X), not (X=null,member(nullable,All)).
+incompatibleProperty(minSize=Min,_,X) :- !, nonvar(X), not atomSize(X,Min,_).
+incompatibleProperty(maxSize=Max,_,X) :- !, nonvar(X), not atomSize(X,_,Max).
+
+atomSize(A,Min,Max) :- 
+   atom(A), atom_codes(A,L), length(L,N),
+   (number(Min) -> N>=Min ; var(Min)),
+   (number(Max) -> N=<Max ; var(Max)).
+
+upperATOM(A) :- atom(A), atom_codes(A,L), upper_chars(L).
+upper_chars([]).
+upper_chars([C|_]) :- C>=97, C=<122, !, fail.
+upper_chars([_|Chars]) :- upper_chars(Chars).
+
+
+%containsProperty(+GT,+Property) Property lists should be bound and closed
+containsProperty(GT,_) :- var(GT), !, fail.
+containsProperty(gt(_,Props,_),Property) :- member(Property,Props), !.
+containsProperty(gt(_,Props,_),_) :- member(opaque,Props), !, fail.
+containsProperty(gt(Node,Props,_),Property) :- Node == '.', member(list(GT),Props), !, 
+   containsProperty(GT,Property).
+containsProperty(gt(Node,Props,_Children),Property) :- Node == '.', member(lazytree(GT),Props), !,
+   containsProperty(GT,Property).
+containsProperty(gt(Node,Props,_Children),Property) :- Node == 'XJ$LAZY', member(lazylist(GT),Props), !,
+   containsProperty(GT,Property).
+containsProperty(gt(Node,Props,_Children),Property) :- Node == 'XJ$LAZY', member(lazytree(GT),Props), !,
+   containsProperty(GT,Property).
+containsProperty(gt(_,_,Children),Property) :- !, containsProperty(Children,Property).
+containsProperty([],_) :- !, fail.
+containsProperty([GT|_],Property) :- containsProperty(GT,Property), !.
+containsProperty([_|Children],Property) :- containsProperty(Children,Property).
+
+
+% topAnnotateWithNames(+GT1,-GT2)
+% Annotate a GT top level with guiPredicateLabels/2 information
+topAnnotateWithNames(gt(F,Props,Children),gt(F,NewProps,AChildren)) :- 
+   not F == '.',
+   length(Children,N),
+   guiPredicateLabels(F/N,Names), % GUI data for top level "captions"
+   !,
+   Names =..[Top|ArgNames],
+   addNameIfAnonymous(Props,Top,NewProps),
+   topAnnotateListWithNames(Children,ArgNames,AChildren).
+topAnnotateWithNames(GT,GT).
+
+% addNameIfAnonymous(P,Name,NewP)
+addNameIfAnonymous(P,_,P) :- member(caption=_,P), !.
+addNameIfAnonymous(P,Name,[caption=Name|P]).
+
+topAnnotateListWithNames([],[],[]).
+topAnnotateListWithNames([gt(F,Props,C)|Children],[Name|ArgNames],[gt(F,NewProps,C)|AChildren]) :- 
+   addNameIfAnonymous(Props,Name,NewProps),
+   topAnnotateListWithNames(Children,ArgNames,AChildren).
+   
+
+
+%%% GT Utilities
+
+% addProperty(GT,Property,NewGT) adds to top node only
+addProperty(gt(N,P,C),Property,gt(N,[Property|P],C)) :- not member(Property,P), !.
+addProperty(GT,_P,GT).
+
+% checkInList(+L,+X,-NL)
+checkInList(L,X,NL) :- member(X,L), !, L=NL.
+checkInList(L,X,[X|L]).
+
+%addToAllNodesExceptTop(+GT,+Property,-NGT)  
+addToAllNodesExceptTop(GTs,Property,NewGTs) :- is_list(GTs),!,
+	addToAllNodes(GTs,Property,NewGTs).
+addToAllNodesExceptTop(gt(F,Props,C),Property,gt(F,Props,NC)) :-
+	addToAllNodes(C,Property,NC).
+
+
+% addToAllNodes(+GT,+Property,-NGT)  Does not dive into lazy subterms, just does their roots
+addToAllNodes(GT,_,_) :- var(GT), !, fail.
+addToAllNodes(gt(N,Props,C),P,gt(N,NProps,C)) :- member(opaque,Props), !, 
+   checkInList(Props,P,NProps).
+addToAllNodes(gt(N,Props,C),P,gt(N,NProps,NC)) :- member(nonpersistent,Props), !, 
+   checkInList(Props,P,NProps), 
+   addToAllNodes(C,P,NC).
+addToAllNodes(gt(N,Props,C),P,gt(N,NProps,C)) :- N == '.', (member(list(_GT),Props);member(lazytree(_GT),Props)),!,
+   checkInList(Props,P,NProps).
+addToAllNodes(gt(N,Props,C),P,gt(N,NProps,C)) :- N == 'XJ$LAZY', !,
+   checkInList(Props,P,NProps).
+addToAllNodes([],_,[]) :- !.
+addToAllNodes([C1|Cn],P,[NC1|NCn]) :- !, 
+   addToAllNodes(C1,P,NC1), addToAllNodes(Cn,P,NCn).
+addToAllNodes(gt(N,Props,C),P,gt(N,NProps,NC)) :- 
+   checkInList(Props,P,NProps), addToAllNodes(C,P,NC).
+
+% lazyTemplate(+Props,-GT) Finds first lazy list/tree template
+lazyTemplate(Props,GT) :- member(lazylist(GT),Props), !.
+lazyTemplate(Props,GTs) :- member(lazytree(GTs),Props), !. 
+
+check_asserted(Fact) :- Fact, !.
+check_asserted(Fact) :- assert(Fact).
+
+% xjMergeProperties(InitialGT,GTwithExtraProps,FinalGT)
+% Only deals with "eager" (lazy-less) terms
+xjMergeProperties(X,Y,Z) :- var(X), !, (nonvar(Y) -> Z=Y;Z=X).
+xjMergeProperties(X,Y,Z) :- var(Y), !, Z=X.
+xjMergeProperties(gt(Node,Props,Children),gt(ExtraNode,ExtraProps,ExtraChildren),gt(MergedNode,MergedProps,NewChildren)) :- 
+	merge(Props,ExtraProps,MergedProps),
+	((ExtraNode=='.',member(list(_),MergedProps), (var(Node);Node=='.')) -> MergedNode='.'; MergedNode=Node),
+	xjMergeProperties(Children,ExtraChildren,NewChildren).
+xjMergeProperties([C|Children],[Extra|ExtraChildren],[NewC|NewChildren]) :- !,
+	xjMergeProperties(C,Extra,NewC), xjMergeProperties(Children,ExtraChildren,NewChildren).
+xjMergeProperties(_GT,[],[]) :- !.
+xjMergeProperties([],X,X) :- !.
+xjMergeProperties(GT,[GT1|GTn],[NewGT1|NewGTn]) :- !,
+	xjMergeProperties(GT,GT1,NewGT1), xjMergeProperties(GT,GTn,NewGTn).
+
+% xjCollectMenuOperations(GlobalProps,MenuOps)
+xjCollectMenuOperations([operation(Lambda,Op,Menu)|Props],[operation(Lambda,Op,Menu)|MenuOps]) :-
+	functor(Menu,menu,_),
+	!,
+	xjCollectMenuOperations(Props,MenuOps).
+xjCollectMenuOperations([_|Props],MenuOps) :- !, xjCollectMenuOperations(Props,MenuOps).
+xjCollectMenuOperations([],[]).
+	
+%%% GUITerm object construction
+
+% buildGUITerm(Term,TermModelSpec) Cf. buildTermModel in interprolog.P
+% build an object specification for a GUITerm representing the GT
+% some liberties are taken with opaque sub terms: if var, their children 
+% are closed to []
+buildGUITerm(X,Model) :- copy_term(X,XX), buildGUITerm_(XX,Model).
+buildGUITerm(X,Vars,Model, NewVars) :- copy_term(a(X,Vars),a(XX, NewVars)), buildGUITerm_(XX,Model).
+
+isBTMvar(V) :- var(V), !.
+isBTMvar(iP_Variable_(_)).
+
+buildGUITerm_(Gt,Model) :-	
+   (Gt = (Mod:gt(Node,Props,Children)) -> true ; Gt = gt(Node,Props,Children)),
+   buildGUITermNode_(Node,NodeModel),
+   buildPropModelList(Props,PropsModel),
+   buildGUITerm_2(Node,Props,Children,ChildrenModel,IsPrologList),
+   (var(Mod)
+    ->	   ipObjectSpec('GUITerm',Model,[IsPrologList,ChildrenModel,NodeModel,PropsModel],_)
+    ;	   atom(Mod),
+	   ipObjectSpec('GUITerm',Model,[IsPrologList,ChildrenModel,NodeModel,Mod,PropsModel],_)
+   ),
+   !. % Weird second solutiomn somewhere. Might it be here??
+
+buildGUITerm_2(Node,Props,Children,ChildrenModel,1) :- 
+   Node=='.', (member(opaque,Props);member(list(_),Props);member(lazytree(_),Props)), 
+   !, 
+   buildTermModelList_(Children,ChildrenModel).
+buildGUITerm_2(_Node,Props,Children,ChildrenModel,0) :- 
+   member(opaque,Props),
+   !,
+   buildTermModelList_(Children,ChildrenModel).
+buildGUITerm_2(Node,_Props,Children,ChildrenModel,0) :- Node=='XJ$LAZY', !,
+   buildTermModelList_([Children],ChildrenModel).
+buildGUITerm_2(_Node,_Props,Children,ChildrenModel,0) :- 
+   buildGUITermList_(Children,ChildrenModel).
+
+buildGUITermNode_(X,Integer) :- integer(X), !, 
+   ipObjectSpec('java.lang.Integer',Integer,[X],_).
+buildGUITermNode_(X,Float) :- float(X), !, 
+   ipObjectSpec('java.lang.Float',Float,[X],_).
+buildGUITermNode_(X,string(X)) :- atom(X), !.
+buildGUITermNode_(X,Model) :- var(X), !, 
+   ip_inc_var_counter(N), X= iP_Variable_(N), buildGUITermNode_(X,Model).
+buildGUITermNode_(iP_Variable_(Nx),Model) :- !,
+   ipObjectSpec('VariableNode',Model,[Nx],_).
+
+buildGUITermList_([],null) :- !.
+buildGUITermList_(Children,ChildrenModel) :- 
+   buildGUITermList_2(Children,ChildrenModel_),
+   ipObjectSpec('ArrayOfTermModel',ChildrenModel,[ChildrenModel_],_).
+
+buildGUITermList_2([],[]) :- !.
+buildGUITermList_2([A1|An],[Model1|ModelN]) :-
+   buildGUITerm_(A1,Model1), buildGUITermList_2(An,ModelN).
+
+% buildPropModelList(Props,PropsModel)
+buildPropModelList([],[]) :- !.
+buildPropModelList([list(Templates)|Pn],[LModel|ModelN]) :- is_list(Templates), !,
+   buildGUITermList_(Templates,TModelArray),
+   ipObjectSpec('TermModel',TModel1,[1,TModelArray,string('.')],_),
+   ipObjectSpec('ArrayOfTermModel',TModel,[[TModel1]],_),
+   ipObjectSpec('TermModel',LModel,[0,TModel,string(list)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([list(Template)|Pn],[LModel|ModelN]) :- !,
+   buildGUITerm_(Template,TModel),
+   ipObjectSpec('ArrayOfTermModel',ChildrenModel2,[[TModel]],_),
+   ipObjectSpec('TermModel',LModel,[0 /*hasListFunctor*/,ChildrenModel2,string(list)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([lazylist(Templates)|Pn],[LModel|ModelN]) :- is_list(Templates), !,
+   buildGUITermList_(Templates,TModelArray),
+   ipObjectSpec('TermModel',TModel1,[1,TModelArray,string('.')],_),
+   ipObjectSpec('ArrayOfTermModel',TModel,[[TModel1]],_),
+   ipObjectSpec('TermModel',LModel,[0,TModel,string(lazylist)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([lazylist(Template)|Pn],[LModel|ModelN]) :- !,
+   buildGUITerm_(Template,TModel),
+   ipObjectSpec('ArrayOfTermModel',ChildrenModel2,[[TModel]],_),
+   ipObjectSpec('TermModel',LModel,[0,ChildrenModel2,string(lazylist)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([lazytree(Templates)|Pn],[LModel|ModelN]) :- is_list(Templates), !,
+   buildGUITermList_(Templates,TModelArray),
+   ipObjectSpec('TermModel',TModel1,[1,TModelArray,string('.')],_),
+   ipObjectSpec('ArrayOfTermModel',TModel,[[TModel1]],_),
+   ipObjectSpec('TermModel',LModel,[0,TModel,string(lazytree)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([lazytree(Template)|Pn],[LModel|ModelN]) :- !,
+   buildGUITerm_(Template,TModel),
+   ipObjectSpec('ArrayOfTermModel',ChildrenModel2,[[TModel]],_),
+   ipObjectSpec('TermModel',LModel,[0,ChildrenModel2,string(lazytree)],_),
+   buildPropModelList(Pn,ModelN).
+buildPropModelList([P1|Pn],[Model1|ModelN]) :-  
+   buildTermModel_(P1,Model1), % keep variable bindings...
+   buildPropModelList(Pn,ModelN).
+
+
+%%% XJAction support
+
+:- dynamic xj_interestingFailure/2.
+
+xj_failError(Message,Args) :-
+	fmt_write_string(Atom,Message,Args),
+	xj_failError(Atom).
+xj_failError(Message) :- 
+   term_to_atom(Message,Atom), asserta(xj_interestingFailure(Atom)), fail.
+
+xj_fetchError(string(Message)) :- retract(xj_interestingFailure(Message)), !.
+
+%%% Support for long operations
+
+% For XJFunctions:
+xjCallIfQuick(G,_,deferred) :- not not guiConfirmOperation(G), !.
+xjCallIfQuick(G,More,done) :- call((G, More)).
+
+% For XJActions:
+xjCallIfQuick(G,deferred) :- not not guiConfirmOperation(G), !.
+xjCallIfQuick(G,done) :- call(G).
+
+
+% getSubtree(+Path,+Term,-Subterm) sub-term utility
+getSubtree([],T,T) :- !.
+getSubtree([N|Path],T,ST) :- arg(N,T,A), getSubtree(Path,A,ST).
+
+
+%%% Support for cache-less Prolog recomputation of Java-side caches
+
+:- import parsort/4 from machine.
+
+countSolutions(G,N) :- 
+   create_counter(C), 
+   ( G, get_increment_counter(C,_), fail ; get_increment_counter(C,N)).
+
+get_solutionN(G,N,S) :-
+   integer(N), !,
+   create_counter(C), NN is N-1, NN>=0,
+   G, get_increment_counter(C,NN), !, G=S.
+
+get_solutionN(G,N,S) :-
+   var(N),
+   create_counter(C),
+   G,
+   get_increment_counter(C,I),
+   S=G,
+   !,
+   N is I+1.
+
+countUniqueSolutions(G,N) :-
+	findall(G,G,Solutions),
+	sort(Solutions, SSolutions),
+	length(SSolutions, N).
+
+countSolutions(true,G,N) :- !, countUniqueSolutions(G,N).
+countSolutions(fail,G,N) :- countSolutions(G,N).
+
+/** For the sake of cutting over tabled goals, ODBC cursors etc., the following is less parcimonious 
+then it could be: it could cut/fail after the last solution is produced */
+% get_solution_models(Goal,Term,First,Last,Solutions)  First,Last: 0..N-1  Returns a TermModel[]
+get_solution_models(G,T,First,Last,Array) :-
+   integer(First), integer(Last),
+   findall(M,
+      (create_counter(C), G, get_increment_counter(C,N), N>=First, N=<Last, buildTermModel(T,M)),
+      Solutions),
+   ipObjectSpec('ArrayOfTermModel',Solutions,Array).
+
+% for sorted non-prolog-cached lists
+get_sorted_solution_models(G,T,First,Last,Sort,Array) :-
+   integer(First), integer(Last),
+   %findall(G, G, Solutions),
+   findall(T, G, Solutions),
+   parsort(Solutions,Sort,1,SSolutions),
+   findall(M,
+      (create_counter(C), member(T,SSolutions), get_increment_counter(C,N), N>=First, N=<Last, buildTermModel(T,M)),
+      SolutionModels),
+   ipObjectSpec('ArrayOfTermModel',SolutionModels,Array).
+
+% for sorted non-prolog-cached trees
+% the same as for lists, but does not have lower and upper bound
+get_sorted_solution_models(G,T,Sort,Array) :-
+   findall(G, G, Solutions),
+   parsort(Solutions,Sort,1,SSolutions),
+   findall(M,
+      (member(G,SSolutions), buildTermModel(T,M)),
+      SolutionModels),
+   ipObjectSpec('ArrayOfTermModel',SolutionModels,Array).
+
+% get_cached_solution_models(Goal,Term,NotificationGoal,First,Last,Solutions) 
+% As the previous one, but using the David cache, which uses 1..N indexes
+get_cached_solution_models(G,T,SortTerm,NotificationGoal,First,Last,Array) :-
+   integer(First), integer(Last),
+   %writeln(first-First),
+   %writeln(last-Last),
+   First1 is First+1, Last1 is Last+1,
+   findall(M,
+      (cache_range(G,SortTerm,NotificationGoal,First1,Last1), buildTermModel(T,M)),
+      Solutions),
+   ipObjectSpec('ArrayOfTermModel',Solutions,Array).
+
+get_sort_term(SortIndexListModel, Goal, SortTermList):-
+	recoverTermModel(SortIndexListModel, SortIndexList),
+	get_sort_term_list(SortIndexList, Goal, SortTermList).
+
+get_sort_term_list([], _Goal, []).
+get_sort_term_list([asc(Index)|List], Goal, [asc(SortTerm)|SortList]):-
+	goal_arg(Index, Goal, SortTerm),
+	get_sort_term_list(List, Goal, SortList).
+get_sort_term_list([desc(Index)|List], Goal, [desc(SortTerm)|SortList]):-
+	goal_arg(Index, Goal, SortTerm),
+	get_sort_term_list(List, Goal, SortList).
+
+goal_arg(I,_Mod:Goal,Arg) :- !, goal_arg(I,Goal,Arg).
+goal_arg(I,Goal,Arg) :- arg(I,Goal,Arg).
+
+%%% Tree support
+
+% xj_getTreeNodeType(+G,-TypeObject) G should be bound to a tree relation tuple instance
+xj_getTreeNodeType(G,null) :- goal_arg(2,G,null), !.
+xj_getTreeNodeType(G,string(Type)) :- goal_arg(2,G,Type).
+
+% xj_discoverTreeRoot(+ScG,+NameG,-RootID,-RootType,-RootTerm) May bind G
+xj_discoverTreeRoot(ScG,NameG,RootID,RootType,RootTerm) :- 
+	goal_arg(2,ScG,null), ScG, !,
+	% there must be a tuple for the root node
+   	goal_arg(1,ScG,RootID),
+	goal_arg(1,NameG,RootID),
+	NameG,
+	xj_getTreeNodeType(NameG,RootType), 
+	goal_arg(3,NameG,RootTerm).
+
+xj_discoverTreeRoot(ScG,RootID) :- 
+    goal_arg(2,ScG,null), ScG, !,
+   % there must be a tuple for the root node
+   goal_arg(1,ScG,RootID).
+
+%% needed for XJTree   
+getTreeLabels(NameG,ScG,NodesModel,Children):-
+        ipObjectSpec('ArrayOfNodeNotifier',NodesModel,[NodeModelList],_),
+        findall(NodeObjects,(getTreeLabels1(NameG,ScG,NodeModelList,NodeObjects)), L),
+        ipObjectSpec('ArrayOfObject',L,Children).
+
+
+getTreeLabels1(NameG,ScG,NodeModelList,NodeObjects):-
+            member(NotifierModel,NodeModelList),
+            once(ipObjectSpec('com.xsb.xj.PrologCachedTreeModel$NodeNotifier',
+			      [nodeID=NodeIDM,ind=Index,nodeRegNumber=NotifierNumber],NotifierModel)),
+            recoverTermModel(NodeIDM,NodeID),
+            goal_arg(1,NameG,NodeID),
+	    findall(NameG, nocache_but_notify(NameG, javaMessage(NotifierNumber,redrawNode)), NameGList),
+	    NameGList = [NameGResult|_],
+            xj_getTreeNodeType(NameGResult,NodeTypeModel), goal_arg(3,NameGResult,NodeTerm), 
+            (NodeTerm = null -> NodeTermModel = null ; buildTermModel(NodeTerm,NodeTermModel)),
+            xj_isLeafNode(ScG,NodeID,NotifierNumber,IsLeafModel),
+            once(ipObjectSpec('com.xsb.xj.PrologCachedTreeModel$NodeLabelInfo',
+	              [ind=Index,nodeTerm=NodeTermModel,nodeType=NodeTypeModel,isLeaf=IsLeafModel],NodeObjects)) .
+
+:- import term_set_arg/4 from machine.
+xj_isLeafNode(ScG,NodeID,NotifierNumber,IsLeafModel):-
+	goal_arg(2,ScG,NodeID),
+	GoalFlag = '$xj_isleafnode'(1),
+	(once(ScG),  term_set_arg(GoalFlag,1,0,1),  fail  ;  true),
+	GoalFlag = '$xj_isleafnode'(IsLeaf),
+	ipObjectSpec('java.lang.Boolean',  IsLeafModel, [IsLeaf], _),
+	just_notify(ScG, javaMessage(NotifierNumber,invalidateAndRefresh)).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Clean up cache notifiers for prolog cached trees for name labels and leaf information
+removeTreeLabelCache(NameG,ScG,NodesModel):-
+        ipObjectSpec('ArrayOfNodeNotifier',NodesModel,[NodeModelList],_),
+        removeTreeLabelCache1(NameG,ScG,NodeModelList).
+
+:- import cache_remove_notifier/4 from prologCache.
+
+removeTreeLabelCache1(NameG,ScG,NodeModelList):-
+            member(NotifierModel,NodeModelList),
+            once(ipObjectSpec('com.xsb.xj.PrologCachedTreeModel$NodeNotifier',
+			      [nodeID=NodeIDM,ind=_Index,nodeRegNumber=NotifierNumber],NotifierModel)),
+            recoverTermModel(NodeIDM,NodeID),
+	    %% remove name goal cache
+            goal_arg(1,NameG,NodeID),
+	    (cache_remove_notifier(NameG, none, javaMessage(NotifierNumber,redrawNode), nocache) -> true ; true),
+            xj_removeLeafInfoCache(ScG,NodeID,NotifierNumber),
+	    fail.
+removeTreeLabelCache1(_,_,_).
+
+xj_removeLeafInfoCache(ScG,NodeID,NotifierNumber):-
+	goal_arg(2,ScG,NodeID),
+	(cache_remove_notifier(ScG, none, javaMessage(NotifierNumber, invalidateAndRefresh), nocache) -> true ; true).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+/**
+  setSort(PrologCachedComponentGui, Direction, Index) for sorted prolog cached
+  lists changes the argument on which the list is being sorted to (Direction, Index).
+  PrologCachedComponentGui is a reference to the sorted list.
+  Direction is either 'asc' or 'desc'. Index is the argument number.
+*/
+setSort(PrologCachedComponentGui, Direction, Index):-
+	atom(Direction), integer(Index),
+	SortTerm =.. [Direction, Index],
+	setSort(PrologCachedComponentGui, [SortTerm]).
+
+/**
+  setSort(PrologCachedComponentGui, SortList) for sorted prolog cached
+  lists changes the argument on which the list is being sorted to SortList.
+  PrologCachedComponentGui is a reference to the sorted list.
+  SortList is of the form [asc(Ind1), desc(Ind2), ..], where IndN is an
+  integer index of the sorted component goal argument, for example [asc(1)].
+*/
+setSort(PrologCachedComponentGui, SortList):-
+	is_list(SortList),
+	buildTermModel(SortList, SortListModel),
+	javaMessage(PrologCachedComponentGui, Model, getModel),
+	javaMessage(Model, setSortTerm(SortListModel)).
+
+/**
+  getSort(PrologCachedComponentGui, SortTerm) for sorted prolog cached
+  components returns the argument on which it is being sorted.
+  PrologCachedComponentGui is a reference to the sorted component.
+  SortTerm is being instantiated to a list like [asc(2), desc(4)].
+  See setSort/2.
+*/
+getSort(PrologCachedComponentGui, SortTerm):-
+	javaMessage(PrologCachedComponentGui, Model, getModel),
+	javaMessage(Model, SortListModel, getSortTerm),
+	(SortListModel = null
+	 ->	SortTerm = none
+	 ;	recoverTermModel(SortListModel, SortTerm)
+	).
+
+/**
+  getSort(PrologCachedComponentGui, Goal, SortTerm) for sorted prolog cached
+  components returns the argument on which it is being sorted.
+  PrologCachedComponentGui is a reference to the sorted list.
+  Unlike the getSort/2, getSort/3 does not return the argument index
+  as sort index, but binds SortTerm variables to a (variable) argument
+  in a Goal term corresponding to that index.
+*/
+getSort(PrologCachedComponentGui, Goal, SortTerm):-
+	getSort(PrologCachedComponentGui, SortTermNumArg),
+	(SortTermNumArg = none
+	 ->	SortTerm = none
+	 ;	get_sort_term_list(SortTermNumArg, Goal, SortTerm)
+	).
+
+/* No longer used:
+% xjTreePathFromRoot(+NodeID,+SubClassGoalTemplate,+OriginalContext,+Context,-Path)
+xjTreePathFromRoot(null,_SCG,_OC,_C,[]) :- !.
+xjTreePathFromRoot(Node,SCG,OC,C,Path) :- 
+   copy_term(SCG+OC,SCGC+OCC), copy_term(C,CC), 
+   OCC = CC, 
+   goal_arg(1,SCGC,Node), call(SCGC), goal_arg(2,SCGC,Parent),
+   xjTreePathFromRoot(Parent,SCG,OC,C,ParentPath),
+   append(ParentPath,[Node],Path).
+*/
+
+xjLogWriter(ErrorLevel, ModuleName, Pred, Message, MessageList) :-
+	nonvar(ErrorLevel),
+	log_get_timestamp(TimeStamp),
+	log_level(ErrorLevel, _Error_num, ErrorLabel, _),
+	
+	(xjDesktop(Desktop)
+	 ->	concat_atom([TimeStamp, ' ', ErrorLabel, ' [', ModuleName, ':', Pred, '] :: ', Message], Log_msg),
+		javaMessage(Desktop,showOutputFrame(string(ErrorLevel),string(Log_msg))),
+		xj_concat_comma_list(MessageList,Messages),
+		javaMessage(Desktop,showOutputFrame(string(ErrorLevel),string(Messages)))
+	 ;	default_log_writer(ErrorLevel, ModuleName, Pred, Message, MessageList)
+	).
+
+xjLogWriter_stop(Arg) :-
+	default_log_writer(sys, 'xj','default_log_writer_stop/1', 'stopping.', Arg).
+xjLogWriter_start(Arg) :-
+	default_log_writer(sys, 'xj','default_log_writer_start/1', 'starting.', Arg).
+
+%% called from XJPrologEngine from catch when deterministic goal aborts
+/* handle_xj_error(Exception):-
+	(xj_if_predicate_defined(log_error(_,_,_))
+	 ->	(Exception = cdf_error(Type,List) %% error is thrown by CDF, hopefully xsb_logger is loaded by that time
+		 ->	xj_concat_comma_list(List,Messages),
+			log_error('CDF', '', Type, [Messages])
+		 ;	(Exception = '_$abort_ball'(AbortMsg,Backtrace)
+			 ->	concat_atom(AbortMsg,AbMsg),
+				log_error('Java call','',AbMsg),
+				log_backtrace(Backtrace)
+			 ;	Exception = '_$abort_ball'(Backtrace)
+			 ->	log_error('Java call','','Aborting...'),
+				log_backtrace(Backtrace)
+			 ;	term_to_atom(Exception, ExceptionAtom),
+				log_error('Java call', '', ExceptionAtom)
+			)
+	 ;	% Exception is thrown before xsb_logger is loaded 
+		 writeln('++Error:'),
+		 writeln(Exception)
+		) 
+	),fail.
+*/
+
+xj_concat_comma_list(Var, '_'):- var(Var),!.
+xj_concat_comma_list((A,B),Text):- !,
+	(atom(A)
+	 ->	A1 = A
+	 ;	term_to_atom(A,A1)),
+   xj_concat_comma_list(B,Text1),
+   concat_atom([A1,' ',Text1],Text).
+xj_concat_comma_list(A,A1) :-
+	(atom(A)
+	 ->	A1 = A
+	 ;	term_to_atom(A,A1)
+	).
+
+xj_if_predicate_defined(Skel):-
+	findall(Prop, predicate_property(Skel, Prop), PropList),
+	\+member(unclassified,PropList),
+	\+member(function,PropList).
+
+find_child_index(ScG, SortTerm, ParentNodeId, ChildNodeId, JIndex):-
+	goal_arg(2, ScG, ParentNodeId),
+	xj_goal_arg_list(ScG, [_Child, _Parent|ArgList]),
+	xj_select_vars(ArgList, VarList),
+	Ret =.. [ret, ChildNodeId|VarList],
+%%	writeln(cache_index(ScG, SortTerm, Ret, Index)),
+	(cache_index(ScG, SortTerm, Ret, Index)
+	 ->	ipObjectSpec(int, JIndex, [Index], _)
+	 ;	ipObjectSpec(int, JIndex, [-1], _)
+	).
+
+xj_goal_arg_list(_:Goal, List):- !,	
+	xj_goal_arg_list(Goal, List).
+xj_goal_arg_list(Goal, List):-
+	Goal =.. [_|List].
+
+xj_select_vars([],[]).
+xj_select_vars([H|T],[H|T1]):-
+	var(H), !,
+	xj_select_vars(T, T1).
+xj_select_vars([_|T],T1):-
+	xj_select_vars(T, T1).
+
+:- dynamic xjFloraDuplicateHack/1.
+
+% Flora support
+% In Lazy trees components a lazy(...flora(FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3|Vars])...) goal will be rewriten (at component construction time) to the following...:
+% (undefined results and exceptions are NOT welcome). Cf. LazyTreeModel.
+% NONREENTRANT
+xjLazyFloraGoal(Arg1,Arg2,Arg3,FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3|Vars]) :- 
+	xjLazyFloraGoal(FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3|Vars]).
+
+% These used for lazy graphs:
+% For nodes:
+xjLazyFloraGoal(Arg1,Arg2,Arg3,Arg4,FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3,V4=Arg4|Vars]) :- 
+	xjLazyFloraGoal(FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3,V4=Arg4|Vars]).
+% For edges:
+xjLazyFloraGoal(Arg1,Arg2,Arg3,Arg4,Arg5,Arg6,FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3,V4=Arg4,V5=Arg5,V6=Arg6|Vars]) :- 
+	xjLazyFloraGoal(FloraGoalAtom,[V1=Arg1,V2=Arg2,V3=Arg3,V4=Arg4,V5=Arg5,V6=Arg6|Vars]).
+
+% For browseGraphFloraRelation; this variant grounds vars with their (Flora) names
+xjLazyFloraGoalGrounding(Arg1,Arg2,FloraGoalAtom,[V1=Arg1,V2=Arg2|Vars]) :- 
+	xjLazyFloraGoal(FloraGoalAtom,[V1=Arg1,V2=Arg2|Vars],true).
+
+
+ 
+%xjLazyFloraGoal(Arg1,Arg2,FloraGoalAtom,[V1=Arg1,V2=Arg2|Vars]) :- !, 
+%	atom(V1), atom(V2), fj_flora_query(FloraGoalAtom,[V1=Arg1,V2=Arg2|Vars],normal,0,Ex), nonvar(Ex).
+
+% Convenience predicate for lazy list goals and also actions, which are rewritten into this, cf. GUITerm.floraPreprocess :
+xjLazyFloraGoal(G,VarList) :- xjLazyFloraGoal(G,VarList,fail).
+
+% if GroundVars == true, grounds free answer vars with their names; if ==fail, doesn't
+xjLazyFloraGoal(G,VarList, GroundVars) :- atom(G), is_list(VarList),
+	xjAllVarnamesAreAtoms(VarList),
+	GG = G-VarList,
+	retractall(xjFloraDuplicateHack(GG)), % retractall(xjFloraDuplicateHack(_)) would cause some XSB crashes
+	% writeln(call(Number)-G/VarList),
+	fj_flora_query(G,VarList,Status,_WAM,Ex), 
+	% These vars can not be bound apriori:
+	memberchk(success,Status), 
+	% (Ex==normal->true;write('Bad exception calling Flora goal: '), writeln(G), write('vars:'), writeln(VarList), writeln(Ex), fail), 
+	(Ex==normal->true;throw(Ex)), 
+	% Let our callers worry about undefinedness... WAM =:=0,
+	(GroundVars->xj_bind_free_vars(VarList);true),
+	% apparently (...) flora_query returns some duplicates... might be because of some free (existencial?) vars
+	\+ \+ (( numbervars(GG,0,_,[attvar(bind)]), (xjFloraDuplicateHack(GG) -> fail; assert(xjFloraDuplicateHack(GG))))).
+	% writeln(solution(Number)-G/VarList).
+
+xjAllVarnamesAreAtoms([]) :- !.
+xjAllVarnamesAreAtoms([VN=_|L]) :- atom(VN), !, xjAllVarnamesAreAtoms(L).
+xjAllVarnamesAreAtoms([_VN=_|_L]) :- writeln('Non atomic Flora variable name'), fail.
+
+xj_bind_free_vars([]).
+xj_bind_free_vars([VV|Vars]) :- 
+	VV=..[_,Name,Var], (var(Var)->Var=Name;true),
+	xj_bind_free_vars(Vars).
+
+% Predicate to allow xref to get subgoal calls in GTs
+% Overzealous: considers the subterms below as "meta" disregarding their GT (XJ term) context
+xjSubtermGoal(T,_) :- (var(T); atomic(T)), !, fail.
+xjSubtermGoal(gt(Node,Props,C),G) :-  !, 
+	(xjSubtermGoal(Props,G) ; 
+	( Node == 'XJ$LAZY', nonvar(C), xjSubtermGoalLazy(C,Props,G) )).
+xjSubtermGoal(operation(_,GG,_),G) :-
+	!,
+	nonvar(GG),
+	((GG=threaded(G);GG=disabling(G);GG=threadedInAWT(G))->true;GG=G).
+xjSubtermGoal(function(_,GG,_,_),G) :-  !, nonvar(GG), ((GG=threaded(G);GG=disabling(G);GG=threadedInAWT(G))->true;GG=G).
+xjSubtermGoal([X|L],G) :- !, (xjSubtermGoal(X,G) ; xjSubtermGoal(L,G)).
+xjSubtermGoal(T,G) :- T=..[_|L], xjSubtermGoal(L,G).
+
+xjSubtermGoalLazy(lazy(G),_Props,G) :- !.
+xjSubtermGoalLazy(lazy(_,G),_Props,G) :- !.
+xjSubtermGoalLazy(lazy(R1,R2,_),Props,G) :-
+	nonvar(Props),
+	memberchk(X,Props),
+	X == (class='com.xsb.xj.XJGraph'),
+	!,
+	(G=R1;G=R2).
+xjSubtermGoalLazy(lazy(_T,G,_C),_Props,G).
+
+% This enables both an XJButton and its actions... to be used in conjunction with  disabling(_) operations
+xjEnableActionsOf(Button) :-
+	ipObjectSpec(boolean,TRUE,[1],_),
+	javaMessage(Button,setEnabledOfActions(TRUE)).
+
+
+sublist(CArgCodes,GArgCodes) :- append(CArgCodes,_,GArgCodes), !.
+sublist(CArgCodes,[_|Codes]) :- sublist(CArgCodes,Codes).
+
+
+
+% Utility for making sure all Swing events are handled, e.g. those causing deferred Prolog goals.
+% Necessary only for user containers, XJ primitives already call it 
+xjWaitForSwing :- java('com.xsb.xj.XJDesktop',waitForSwing).

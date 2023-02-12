@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="src" path="src"/>
+	<classpathentry kind="src" path="test"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/autocomplete.jar" sourcepath="/Users/mc/git/AutoComplete/src/main/java"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/ejml-0.23.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/joda-time.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/jollyday.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/stanford-corenlp-3.3.0-models.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/stanford-corenlp-3.3.0.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/xom.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jhall.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/collections-generic-4.01.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/jung-algorithms-2.0.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/jung-api-2.0.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/jung-graph-impl-2.0.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/jung-io-2.0.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/jung-visualization-2.0.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/junit-4.5.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/juniversalchardet-1.0.3.jar"/>
+	<classpathentry kind="lib" path="externalJars/owlapi-distribution-3.5.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/rstaui.jar" sourcepath="/Users/mc/git/RSTAUI/src"/>
+	<classpathentry exported="true" kind="lib" path="externalJars/rsyntaxtextarea.jar" sourcepath="/Users/mc/git/RSyntaxTextArea/src/main/java"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>
