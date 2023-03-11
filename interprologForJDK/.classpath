@@ -6,8 +6,8 @@
 	<classpathentry kind="lib" path="externalJars/fidjiNLP/ejml-0.23.jar"/>
 	<classpathentry kind="lib" path="externalJars/fidjiNLP/joda-time.jar"/>
 	<classpathentry kind="lib" path="externalJars/fidjiNLP/jollyday.jar"/>
-	<classpathentry kind="lib" path="externalJars/fidjiNLP/stanford-corenlp-3.3.0-models.jar"/>
-	<classpathentry kind="lib" path="externalJars/fidjiNLP/stanford-corenlp-3.3.0.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/largefiles/stanford-corenlp-3.3.0-models.jar"/>
+	<classpathentry kind="lib" path="externalJars/fidjiNLP/largefiles/stanford-corenlp-3.3.0.jar"/>
 	<classpathentry kind="lib" path="externalJars/fidjiNLP/xom.jar"/>
 	<classpathentry exported="true" kind="lib" path="externalJars/jhall.jar"/>
 	<classpathentry exported="true" kind="lib" path="externalJars/jung2_0_1minimal/collections-generic-4.01.jar"/>

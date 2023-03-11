@@ -1,0 +1,4 @@
+# this overrides parent gitignore on .jar. The parent ignores jars,
+# but here we want to include them in the repo.
+
+!*.jar
