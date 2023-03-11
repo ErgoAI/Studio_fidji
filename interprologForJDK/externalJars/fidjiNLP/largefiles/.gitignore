@@ -1,0 +1,5 @@
+
+# ignore all large files and their related files: github does not want
+# them. If necessary, provide them separately
+
+*.jar

@@ -128,7 +128,7 @@ interprologForJDK/.ergo_aux_files
 ergo2java.jar
 .PrologStudioHistory.txt
 .ergosuiteHistory.txt
-.gitignore
+#.gitignore
 .ergosuite.log.lck
 .ergosuite.log.1
 tab.P
