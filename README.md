@@ -2,28 +2,28 @@
 
 ##  Preliminary Setup ##
 
-* Linux/Mac: see ErgoEngine/ErgoAI/Studio_scripts/buildErgoStudio.sh
-* Windows:   see ErgoEngine\ErgoAI\Studio_scripts\buildErgoStudio.bat
+* Linux/Mac: see `ErgoEngine/ErgoAI/Studio_scripts/buildErgoStudio.sh`
+* Windows:   see `ErgoEngine\ErgoAI\Studio_scripts\buildErgoStudio.bat`
 
 Build and compile XSB -- see ErgoAI Manual, Appendix A.
 
 Compile ErgoAI Engine:
 
-* cd ErgoEngine/ErgoAI
-* ./makeergo *path-to-XSB*
+* `cd ErgoEngine/ErgoAI`
+* `./makeergo` *path-to-XSB*
 
 ## Compiling ErgoAI Studio ##
 
-* ErgoEngine/ErgoAI/Studio_scripts/buildErgoStudio.sh      *Linux/Mac*
+*  *Linux/Mac*:  `ErgoEngine/ErgoAI/Studio_scripts/buildErgoStudio.sh `    
 
 or
 
-* ErgoEngine\ErgoAI\Studio_scripts\buildErgoStudio.bat      *Windows*
+*  *Windows*:  `ErgoEngine\ErgoAI\Studio_scripts\buildErgoStudio.bat`     
 
-This should build ergoStudio.jar.
+This should build `ergoStudio.jar`.
 
 ## Runing the Studio ##
 
-* ./runErgoAI.sh     *Linux/Mac*
+*  *Linux/Mac*: `./runErgoAI.sh`    
 
-* runErgoAI.exe      *Windows*
+*  *Windows*: `runErgoAI.exe`     
