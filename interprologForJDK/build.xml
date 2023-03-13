@@ -179,12 +179,6 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
       <classpath path="${source.dir}" />
       <classpath path="${externalJars}/junit-4.5.jar" />
       <!-- For experimental builds: -->
-      <classpath path="${externalJars}/fidjiNLP/ejml-0.23.jar" />
-      <classpath path="${externalJars}/fidjiNLP/joda-time.jar" />
-      <classpath path="${externalJars}/fidjiNLP/xom.jar" />
-      <classpath path="${externalJars}/fidjiNLP/jollyday.jar" />
-      <classpath path="${externalJars}/fidjiNLP/largefiles/stanford-corenlp-3.3.0-models.jar" />
-      <classpath path="${externalJars}/fidjiNLP/largefiles/stanford-corenlp-3.3.0.jar" />
       <classpath path="${externalJars}/owlapi-distribution-3.5.0.jar" />
       <compilerarg value="-Xlint:unchecked" />
     </javac>
@@ -238,12 +232,6 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
       <classpath path="${externalJars}/jung2_0_1minimal/jung-io-2.0.1.jar" />
       <classpath path="${externalJars}/jung2_0_1minimal/jung-visualization-2.0.1.jar" />
 
-      <classpath path="${externalJars}/fidjiNLP/ejml-0.23.jar" />
-      <classpath path="${externalJars}/fidjiNLP/joda-time.jar" />
-      <classpath path="${externalJars}/fidjiNLP/xom.jar" />
-      <classpath path="${externalJars}/fidjiNLP/jollyday.jar" />
-      <classpath path="${externalJars}/fidjiNLP/largefiles/stanford-corenlp-3.3.0-models.jar" />
-      <classpath path="${externalJars}/fidjiNLP/largefiles/stanford-corenlp-3.3.0.jar" />
       <classpath path="${externalJars}/owlapi-distribution-3.5.0.jar" />
       <compilerarg value="-Xlint:unchecked" />
     </javac>

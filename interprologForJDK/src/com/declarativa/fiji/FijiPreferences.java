@@ -856,11 +856,16 @@ public class FijiPreferences extends Properties{
         return true;
     }
 	
-    // This should be refactored to some Coherent-specific class (Ergo engine...?)
+    // This has to move to the NLP tool when it is properly set up under
+    // ErgoAI/Tools.
+    // Also, get rid of the places where nlpSupported() is used,
+    // like FijiSubprocessEngineWindow.java. Move those to the NLP tool.
     public static boolean nlpSupported(){
         return fidjiNLPdir!=null;
     }
 
+    // This has to move to the NLP tool when it is properly set up under
+    // ErgoAI/Tools.
     static boolean addNLPJars(){
         File baseDir = fidjiNLPdir;
         try{
