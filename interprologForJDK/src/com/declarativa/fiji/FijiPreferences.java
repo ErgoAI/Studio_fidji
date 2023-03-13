@@ -72,8 +72,6 @@ public class FijiPreferences extends Properties{
     static final String FIDJIERGO2 = "ErgoAI";
     static final String FIDJIXSB = "XSB";
     static final String FIJIXSB = "fijiXSB";
-    static final String FIDJINLP = "NLP";
-    static final String FIJINLP = "fijiNLP";
     static final String FIJIQUALM = "qualm";
     static final String FIJILPS = "LPS";
     static final String OBJECT_SOURCES_FILENAME = "ObjectSources.P";
@@ -93,7 +91,6 @@ public class FijiPreferences extends Properties{
     static private File brokenFile = new File (BROKEN_PREFS_FILE);
     private static File fidjiDir;
     static File fidjiXrefDir;
-    static File fidjiNLPdir;
     static String FIDJIBUILD = "??";
     public static boolean quietLog=false;
     /** How many times slower startup was comparing to a reference value */
@@ -141,13 +138,6 @@ public class FijiPreferences extends Properties{
                     throw new RuntimeException("Could not create "+fidjiXrefDir);
             if (!getFidjiDir().canWrite())
                 throw new RuntimeException("The directory of the Studio jar must be writeable");
-            File nlpDir = new File(getFidjiDir(),FIDJINLP);
-            if (nlpDir.exists()) fidjiNLPdir = nlpDir;
-            else {
-                nlpDir = new File(getFidjiDir(),FIJINLP);
-                if (nlpDir.exists()) fidjiNLPdir = nlpDir;
-                else fidjiNLPdir = null;
-            }
             if (quietLog) 
                 initHiddenLogging(getFidjiDir());
             if (!classesFile.isDirectory()){
@@ -855,33 +845,6 @@ public class FijiPreferences extends Properties{
         }
         return true;
     }
-	
-    // This has to move to the NLP tool when it is properly set up under
-    // ErgoAI/Tools.
-    // Also, get rid of the places where nlpSupported() is used,
-    // like FijiSubprocessEngineWindow.java. Move those to the NLP tool.
-    public static boolean nlpSupported(){
-        return fidjiNLPdir!=null;
-    }
-
-    // This has to move to the NLP tool when it is properly set up under
-    // ErgoAI/Tools.
-    static boolean addNLPJars(){
-        File baseDir = fidjiNLPdir;
-        try{
-            addSoftwareLibrary(new File(baseDir,"ejml-0.23.jar"));
-            addSoftwareLibrary(new File(baseDir,"joda-time.jar"));
-            addSoftwareLibrary(new File(baseDir,"xom.jar"));
-            addSoftwareLibrary(new File(baseDir,"jollyday.jar"));
-            addSoftwareLibrary(new File(baseDir,"stanford-corenlp-3.3.0-models.jar"));
-            addSoftwareLibrary(new File(baseDir,"stanford-corenlp-3.3.0.jar"));
-            return true;
-        } catch (Exception e){
-            System.err.println("Could not add NLP jars:"+e);
-        }
-        return false;
-    }
-	
 	
     private static String relativeStudioJar = "ergo_lib"+File.separator+"ergo2java"+File.separator+"java"+File.separator+"ergoStudio.jar";
 	

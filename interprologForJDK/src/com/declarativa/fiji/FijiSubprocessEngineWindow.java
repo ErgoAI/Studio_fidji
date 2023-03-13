@@ -972,7 +972,7 @@ public class FijiSubprocessEngineWindow extends SubprocessEngineWindow {
             sparqlSupported = FijiPreferences.ergoSPARQLSupported((FloraSubprocessEngine)engine);
         }
                         
-        if (FijiPreferences.floraSupported && (FijiPreferences.nlpSupported()) || owlSupported || sparqlSupported)
+        if (FijiPreferences.floraSupported && (owlSupported || sparqlSupported))
             toolMenu.addSeparator();
 
         if (FijiPreferences.floraSupported){
@@ -999,18 +999,6 @@ public class FijiSubprocessEngineWindow extends SubprocessEngineWindow {
                                                            "com.coherentknowledge.ergo.sparql.gui.ErgoSPARQL_GUI");                                                                                           
                         }
                     });                         
-        }
-        // DISABLE NLP MENU UNTIL IMPLEMENTED
-        if (false && FijiPreferences.floraSupported && FijiPreferences.nlpSupported()){
-            JMenu NLPmenu = new JMenu("NLP"); 
-            addItemToMenu(NLPmenu,"Convert English to basic theory",new ActionListener(){
-                    public void actionPerformed(ActionEvent e){
-                        System.out.println("TBD!");
-                        beep();
-                        JOptionPane.showMessageDialog(FijiSubprocessEngineWindow.this,"In development","Not Yet",JOptionPane.ERROR_MESSAGE);    
-                    }
-                });
-            toolMenu.add(NLPmenu);
         }
 
         JMenu prologMenu = toolMenu;
@@ -2085,9 +2073,6 @@ public class FijiSubprocessEngineWindow extends SubprocessEngineWindow {
         if (!ve.deterministicGoal("retractall(fjMainListenerWindow(_)), asserta(fjMainListenerWindow("+ve.registerJavaObject(fsw)+"))"))
             throw new IPException("could not assert fjMainListenerWindow in auxiliar engine"); 
 
-        if (FijiPreferences.nlpSupported())
-            if (!FijiPreferences.addNLPJars())
-                abortStartup("Can't load NLP jars");
         fsw.refreshUserModFilesAndLibDirsAndOps();
 
         String QUALMdir = preferences.getProperty("QUALM");
