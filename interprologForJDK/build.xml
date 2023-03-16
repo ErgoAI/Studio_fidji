@@ -1,16 +1,18 @@
 <!--
     Copyright Miguel Calejo, InterProlog Consulting / Renting Point, Portugal 2014
 
-This build either of Coherent ErgoAI Studio, InterProlog Prolog Studio of InterProlog Java bridge.
+This builds Coherent ErgoAI Studio, InterProlog Prolog Studio or InterProlog
+Java bridge, depending on the target passed as an argument.
 
-First, please setup XSB_BIN_DIRECTORY below (and possibly ERGODIR). 
+First, setup XSB_BIN_DIRECTORY and ERGODIR, below or use
+ant  -DXSB_BIN_DIRECTORY=... -DERGODIR=... [-f ..../build.xml] [target]
 
-Then:
+The targets are:
 
 ant: builds ergoStudio.jar if the Coherent Knowledge Systems source subtree is present, or interPrologStudio.jar otherwise 
 ant interprologJar: builds interprolog.jar
-ant ergo2javaJar: builds ergo2java.jar
-ant javadoc: Ergo Studio API documentation, which wil include the following:
+ant ergoCallsJavaJar: builds ergoCallsJava.jar
+ant javadoc: Ergo Studio API documentation, which will include the following:
 ant fijijavadoc: Prolog Studio API documentation, which will include the following:
 ant ipjavadoc: Java bridge API documentation
 
@@ -71,11 +73,9 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
 
   <condition property="git.exists">
       <or>
-    <!--
         <available file="git" filepath="${env.PATH}"/>
         <available file="git.exe" filepath="${env.PATH}"/>
         <available file="git.exe" filepath="${env.Path}"/>
-      -->
       </or>
   </condition>
 
@@ -104,8 +104,9 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
     <path location="${source.dir}"/>
   </pathconvert>
 
-  <target name="ergo2javaJar" depends="do.gitlog,do.nolog,compileI,compileXoverJ">
-    <jar destfile="ergo2java.jar" basedir="${bin.dir}" compress="true">
+  <!-- not being built by Studio_fidji/buildErgoStudio.sh; contains XSBonTop-->
+  <target name="ergoCallsJavaJar" depends="do.gitlog,do.nolog,compileI,compileXoverJ">
+    <jar destfile="ergoCallsJava.jar" basedir="${bin.dir}" compress="true">
       <manifest>
       	<attribute name="Main-Class" value="com/coherentknowledge/fidji/XSBOnTopSubprocessEngine" />
     	<attribute name="Implementation-Version" value="${fidji.build}"/>
@@ -115,7 +116,7 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
   </target>
 
   <target name="compileXoverJ">
-    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+    <javac target="1.8" source="1.8" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
       <src path="${source.dir}/com/coherentknowledge/fidji" />
       <include name="XSBOnTopSubprocessEngine.java" />
       <include name="CtrlStyledOutputPane.java" />
@@ -170,7 +171,7 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
     export XSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY}
     export ERGODIR=${ERGODIR}
     </echo>
-    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+    <javac target="1.8" source="1.8" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
       <src path="${source.dir}/com/declarativa/interprolog" />
       <src path="${source.dir}/com/xsb/interprolog" />
       <src path="${testsource.dir}" />
@@ -213,7 +214,7 @@ zip -dq interprolog.jar com/declarativa/fiji/* com/fife/* com/xsb/xj/* com/sun/*
     export XSB_BIN_DIRECTORY=${XSB_BIN_DIRECTORY}
     export ERGODIR=${ERGODIR}
     </echo>
-    <javac target="1.6" source="1.6" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
+    <javac target="1.8" source="1.8" destdir="${bin.dir}" debug="on" includeantruntime="false" nowarn="on">
       <src path="${source.dir}" />
       <src path="${testsource.dir}" />
       <include name="**/*.java" />
