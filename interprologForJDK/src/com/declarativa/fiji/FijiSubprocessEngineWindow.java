@@ -1926,10 +1926,12 @@ public class FijiSubprocessEngineWindow extends SubprocessEngineWindow {
         if (prologStartCommands==null && mainEngine==null)
             abortStartup("Can't find Prolog engine");
                                         
+        /* No  longer true?
         if (!AbstractPrologEngine.isWindowsOS())
             if (mainEngine==null && prologStartCommands!=null&&prologStartCommands[0].contains(" ") )
                 abortStartup("On non-Windows systems XSB must be in a directory without any spaces in its path name.\nPlease reinstall Ergo and XSB and DELETE the .ergoAI.prefs file...\n"+
                              "...or simply download a self-contained Studio (containing Ergo and XSB) into a directory without spaces");
+        */
         /*
           if (prologStartCommand!=null&&prologStartCommand.contains(" ") || floraDir!=null&&floraDir.contains(" ") )
           abortStartup("Both Ergo and XSB must be in a directory without any spaces in its path name.\nPlease move them elsewhere and DELETE the .ergoAI.prefs file.");
