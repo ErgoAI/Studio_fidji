@@ -1618,6 +1618,11 @@ public abstract class AbstractPrologEngine implements PrologEngine{
      * Grabbed from
      * http://stackoverflow.com/questions/1010919/adding-files-to-java-classpath-at-runtime?answertab=active#tab-top
      *********** DOES NOT WORK WITH Java 9+!!!!!
+     * This is used only by a deprecated method addJar in module \e2j.
+     * Instead, use setJavaCP (set Java classpath), which sets the Java
+     * classpath at run time (but only after killing the previous Java process).
+     * This is not as powerful and flexible as addJar, but is good enough
+     * for most uses.
      */
     public static void addSoftwareLibrary(File file) throws Exception {
         URL url = file.toURI().toURL();
